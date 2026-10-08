@@ -11,7 +11,7 @@
 |---|---|---|
 | 项目名 | DraftGuard | 用户选定："我就是用来保存草稿的" |
 | 应用显示名 | DraftGuard | `strings.xml` 的 `app_name` |
-| 包名 | `com.draftguard` | **故意不改**：Android 用包名识别应用，改了会被当成另一个应用安装、旧记录成孤儿。列为 roadmap 里的一次性破坏性变更 |
+| 包名 | `com.draftguard` | 已从 `com.typelog.recorder` 改过来。**升级要点**：包名变了，Android 视为另一个应用，装新包前必须先卸载旧包 |
 | 无障碍服务名 | DraftGuard · 文本采集 | 显示在系统无障碍列表里，保持中文 |
 
 排除了 `keylog` / `keylogger` 类名字：技术上准确，但该词专指恶意键盘记录器，开源项目用它会招误解。
@@ -125,7 +125,7 @@
 | build-tools | `36.1.0`（aapt2 / d8 / zipalign / apksigner 齐全） |
 | 平台包 | `android-36`（提供 `android.jar`） |
 | JDK | `C:\Users\clotten\AppData\Local\Programs\FlyEnv-Data\env\java`（17） |
-| 签名密钥 | `debug.keystore`，别名 `typelog`，口令 `typelog123`（仅本机调试用） |
+| 签名密钥 | `debug.keystore`（在 `.gitignore` 里，未上传），别名 `typelog`，口令 `typelog123`（仅本机调试用） |
 
 ### 出包（不需要 Gradle、不需要联网）
 
@@ -223,7 +223,7 @@ DraftGuard/                    ← 仓库根目录
 
 ### GitHub 仓库建议
 
-- 仓库名：`typelog-android`（或沿用 `ziJi`）
+- 仓库地址：https://github.com/clotten/DraftGuard（已上传）
 - 分支：`main`（可用版本）+ `dev`（IME 实验）
 - 必备文件：`README.md`（把第七节的设计决策搬过去）、`LICENSE`、
   `.gitignore`（排除 `build/`、`*.keystore`、`data/`）、

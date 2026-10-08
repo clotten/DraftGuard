@@ -1,5 +1,9 @@
 # DraftGuard
 
+[![build](https://github.com/clotten/DraftGuard/actions/workflows/build.yml/badge.svg)](https://github.com/clotten/DraftGuard/actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![minSdk](https://img.shields.io/badge/minSdk-26-green.svg)](#requirements)
+
 **Never lose a draft to an app crash again.**
 
 DraftGuard is an Android app that continuously records the text you type into *any* app's input
