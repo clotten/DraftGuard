@@ -85,7 +85,7 @@ adb shell dumpsys activity services com.draftguard
 adb shell dumpsys accessibility | findstr draftguard
 
 # 安装新包
-adb install -r DraftGuard-2.1.0.apk
+adb install -r DraftGuard-2.12.2.apk
 ```
 
 ---
@@ -163,7 +163,7 @@ com.tencent.mm.jsonl | 行数 12 | 1840 字节 | 最后一条：你做饭吗
 ```bash
 # 我在电脑端执行
 adb connect 10.16.18.155:39145
-adb install -r DraftGuard-2.1.0.apk
+adb install -r DraftGuard-2.12.2.apk
 adb shell am start -n com.draftguard/.MainActivity
 adb exec-out screencap -p > step1.png          # 看：无障碍服务开了没
 

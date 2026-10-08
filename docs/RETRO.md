@@ -173,7 +173,7 @@
 | `docs/ARCHITECTURE.md` | 设计决策：为什么用无障碍、为什么存快照、为什么按分钟 |
 | `docs/REMOTE-DEBUG.md` | 无线调试完整流程 + 诊断探针用法 + 安全边界 |
 | `test/StoreTest.java` | 存储层 22 项（含搜索截断的回归用例） |
-| `test/BurstTest.java` | 合并逻辑 33 项（含 `startsWith` 反例的断言） |
+| `test/BurstTest.java` | 分段与占位判定 36 项（含 `startsWith` 反例、发送边界等断言） |
 | `ProbeReceiver` | 让"应用内部状态"可被外部读取，是后续所有远程调试的基础 |
 
 **最值得保留的不是功能，而是"能看见"的能力**：

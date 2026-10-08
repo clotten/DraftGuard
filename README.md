@@ -37,6 +37,19 @@ DraftGuard's answer: **the text should hit disk while you type, not when you hit
   recorded too, flagged with `comp: true`.
 - **Password fields are untouchable.** The system masks them; DraftGuard also checks
   `isPassword()` and skips them before reading anything into memory.
+- **Messages are split by the real signal, not guesswork.** Tapping *send* / *search* / *publish*
+  is detected from the accessibility click event, so each submitted message becomes its own entry
+  instead of every consecutive message collapsing into the last one.
+- **Only the field you are typing in** (input focus) is recorded — background fields, stale views
+  and empty boxes showing placeholder text are ignored.
+- **Placeholder text is never logged.** Handles both `getHintText()` and the OEMs that return the
+  hint straight from `getText()` (Xiaomi Notes, Bilibili), plus a "first text in a field is the
+  hint" fallback.
+- **Deletions do not create records.** Type a typo, delete it, retype — the final text is what gets
+  shown, while the raw versions stay on disk.
+- **Keep-alive** via a foreground service with a persistent notification (can be turned off).
+- **Clearing records backs up first**, to `Download/DraftGuard/backup/`.
+- **A diagnostic probe** (`ProbeReceiver`) lets you read the app's internal state over `adb`.
 
 ## Privacy
 
@@ -50,6 +63,10 @@ DraftGuard's answer: **the text should hit disk while you type, not when you hit
 
 The only thing that leaves the app is a ZIP you export yourself through the system share sheet.
 
+**Data survives updates** as long as builds are signed with the same key — records live in
+app-private storage, not in the APK. Uninstalling, clearing app data, changing the signing key, or
+a factory reset will lose them. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) § Data safety.
+
 ## Requirements
 
 - Android 8.0 (API 26) or newer
@@ -60,7 +77,7 @@ The only thing that leaves the app is a ZIP you export yourself through the syst
 ## Install
 
 ```bash
-adb install -r DraftGuard-2.0.0.apk
+adb install -r DraftGuard-2.12.2.apk
 ```
 
 Or copy the APK to the phone and tap it. Then:
@@ -100,7 +117,7 @@ bucketing, and a regression case for a search bug that silently skipped entire f
 No Gradle, no network, no AndroidX — just the SDK's own tools:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build-apk.ps1 -OutName 'DraftGuard-2.0.0.apk'
+powershell -ExecutionPolicy Bypass -File build-apk.ps1 -OutName 'DraftGuard-2.12.2.apk'
 ```
 
 `aapt2 compile` → `aapt2 link` → `javac` → `d8` → repack → `zipalign` → `apksigner` → verify.
