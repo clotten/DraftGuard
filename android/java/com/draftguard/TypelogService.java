@@ -100,6 +100,15 @@ public class TypelogService extends AccessibilityService {
     private Handler handler;
     private LogStore store;
     private final Map<String, Pending> pending = new HashMap<>();
+    /**
+     * 每个输入框首次出现的文本。
+     *
+     * 用途：输入框的占位提示文字有两种给法 —— getHintText() 单独给、或直接当 getText() 返回。
+     * 后者无法与"用户真的输入了这句话"区分，但**它一定是该输入框的首条文本**
+     * （实测 B 站评论框：占位「这里是评论区，不是无人区;-)」被当成输入记了下来）。
+     * 所以把首条文本记为疑似占位，之后若原样重现就跳过。
+     */
+    private final Map<String, String> firstSeenText = new HashMap<>();
     /** 轮询去重：控件路径 -> 上次读到的文本，避免每 900ms 重复记同一条 */
     private final Map<String, String> pollLastText = new HashMap<>();
     private final Map<String, String> labelCache = new LinkedHashMap<>();
@@ -342,6 +351,42 @@ public class TypelogService extends AccessibilityService {
         }
     }
 
+    /**
+     * 严格版"是不是输入框"：只认可编辑或有 EditText 类名的控件。
+     *
+     * 事件路径可以放宽（事件带文本本身就是强信号），但**轮询不能放宽** ——
+     * 轮询是主动去读界面，放宽就会读到非输入框的文字。
+     * 实测 B 站搜索页：轮询读到了 [错眉·42分钟前更新]（作者名+时间戳），
+     * 那不是用户输入，却被当成输入记了下来。
+     */
+    private static boolean isStrictInput(AccessibilityNodeInfo node) {
+        if (node == null) {
+            return false;
+        }
+        try {
+            if (node.isPassword()) {
+                return false;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (node.isEditable()) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            CharSequence cls = node.getClassName();
+            if (cls != null) {
+                String n = cls.toString();
+                if (n.contains("EditText") || n.endsWith("Edit")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
     /** 节点当前文本；读不到返回 null（注意：空字符串代表"真的为空"，与 null 不同） */
     private static String textOf(AccessibilityNodeInfo node) {
         if (node == null) {
@@ -366,6 +411,26 @@ public class TypelogService extends AccessibilityService {
     }
 
 
+    /** 遍历找真正的输入框（轮询专用，判定更严） */
+    private static AccessibilityNodeInfo findStrictInput(AccessibilityNodeInfo node, int depth) {
+        if (node == null || depth > 12) {
+            return null;
+        }
+        try {
+            if (isStrictInput(node) && node.isVisibleToUser()) {
+                return node;
+            }
+            int n = node.getChildCount();
+            for (int i = 0; i < n; i++) {
+                AccessibilityNodeInfo hit = findStrictInput(node.getChild(i), depth + 1);
+                if (hit != null) {
+                    return hit;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
     private AccessibilityNodeInfo findEditable(AccessibilityNodeInfo node, int depth) {
         if (node == null || depth > 12) {
             return null;
@@ -463,6 +528,27 @@ public class TypelogService extends AccessibilityService {
         if (text.isEmpty() && !Prefs.keepEmpty(this)) {
             return;
         }
+        // 输入框的"首条文本"极可能是占位提示（部分应用不用 getHintText，
+        // 而是把提示语直接当 getText() 返回）。记下来，后续原样重现就跳过。
+        {
+            String fk = focusedNode != null ? fieldKey(focusedNode, pkg) : (pkg + "#@event");
+            String seen;
+            synchronized (LOCK) {
+                seen = firstSeenText.get(fk);
+                if (seen == null) {
+                    firstSeenText.put(fk, text);
+                    if (firstSeenText.size() > 200) {
+                        firstSeenText.clear();
+                        firstSeenText.put(fk, text);
+                    }
+                }
+            }
+            if (seen != null && seen.equals(text)) {
+                skippedNoise++;
+                return;
+            }
+        }
+
         // 只记"正在输入的框"。这道闸门放在最前面，是为了同时挡住三条来源：
         //   · 事件路径：同屏其它可编辑控件、界面重绘时补发的旧内容
         //   · 轮询路径：每 900ms 重读同一个框（不挡就会把同一段文字重复记很多遍）
@@ -635,15 +721,16 @@ public class TypelogService extends AccessibilityService {
         AccessibilityNodeInfo target = null;
         try {
             AccessibilityNodeInfo f = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-            if (f != null && f.isEditable() && !f.isPassword()) {
+            // 轮询必须用严格判定：放宽会读到非输入框的文字
+            if (isStrictInput(f)) {
                 target = f;
             }
         } catch (Throwable ignored) {
         }
         if (target == null) {
-            target = findEditable(root, 0);
-            if (target != null && target.isPassword()) {
-                return;   // 轮询里遇到密码框：直接跳过
+            target = findStrictInput(root, 0);
+            if (target == null) {
+                return;   // 轮询找不到真正的输入框就跳过，不猜
             }
         }
         if (target == null) {
@@ -746,17 +833,29 @@ public class TypelogService extends AccessibilityService {
         }
     }
 
-    /** 判断被点击的是不是"发送"类按钮 */
+    /**
+     * 判断被点击的是不是"提交类"按钮 —— 发送 / 搜索 / 发表 / 确定 等。
+     *
+     * 通用化过程：最初只认「发送」（聊天类应用），但搜索框没有发送按钮，
+     * 它是「搜索」键或「搜索」图标按钮（实测 B 站就是一个 TextView[搜索]）。
+     * 所以这里归纳为"提交动作"：凡是把输入框内容交出去的动作，都是消息/条目的边界。
+     */
     private static boolean isSendButton(AccessibilityEvent event) {
         String label = "";
 
-        // 先看节点（可用时最准）
         AccessibilityNodeInfo node = null;
         try {
             node = event.getSource();
         } catch (Throwable ignored) {
         }
         if (node != null) {
+            // 排除输入框自身的点击（点输入框不是提交动作）
+            try {
+                if (node.isEditable()) {
+                    return false;
+                }
+            } catch (Throwable ignored) {
+            }
             try {
                 CharSequence t = node.getText();
                 if (t != null) {
@@ -784,10 +883,8 @@ public class TypelogService extends AccessibilityService {
             }
         }
 
-        // 节点拿不到时退回**事件自带的文本**。
-        // 微信的 getSource() 在点击事件上同样返回 null，但事件里带着按钮文字：
-        //   ev: 1 com.tencent.mm android.widget.Button [发送]
-        // （修文本变化时已经吃过这个亏，这里差点又踩一遍。）
+        // 节点拿不到就退回**事件自带的文本**。微信与 B 站的 getSource() 都可能为 null，
+        // 但事件里一直带着按钮文字（实测：[发送] / [搜索]）。
         if (label.isEmpty()) {
             label = eventText(event);
             if (label == null) {
@@ -796,12 +893,29 @@ public class TypelogService extends AccessibilityService {
         }
 
         label = label.trim();
-        if (label.isEmpty() || label.length() > 12) {
+        if (label.isEmpty() || label.length() > 20) {
             return false;
         }
-        return label.equals("发送") || label.equals("Send") || label.equals("send")
-                || label.equals("发出") || label.equals("提交")
-                || label.contains("send") || label.endsWith("send");
+        String low = label.toLowerCase();
+
+        // 提交类动作词表（中文应用的实际叫法）
+        String[] actions = {
+                "发送", "发出", "发送给好友", "发送弹幕", "发送评论",
+                "搜索", "搜一下", "搜",
+                "发表", "发布", "评论", "回复", "提交", "投稿",
+                "确定", "完成", "确认", "好了",
+                "send", "search", "submit", "post", "comment", "reply", "done", "go",
+        };
+        for (String a : actions) {
+            if (label.equals(a)) {
+                return true;
+            }
+        }
+        // 前缀匹配："发送给好友"「搜索一下」这类
+        if (label.startsWith("发送") || label.startsWith("搜索") || label.startsWith("发表")) {
+            return true;
+        }
+        return low.contains("send") || low.equals("search") || low.contains("submit");
     }
     /** 记录一次"发送"边界；下一条文本事件将另起一段 */
     private void markSendBoundary(String pkg) {
