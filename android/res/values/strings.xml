@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 应用名用英文（开源项目名）；系统设置里那句说明保持中文，
+         因为它显示在中文系统的无障碍列表里，用户看到的是这段中文。 -->
+    <string name="app_name">DraftGuard</string>
+    <string name="service_label">DraftGuard · 文本采集</string>
+    <string name="service_description">记录你在各个应用输入框里打出的文字，按分钟分类保存到本机，应用崩溃后也能找回。密码输入框由系统自动屏蔽，本服务读不到。</string>
+</resources>

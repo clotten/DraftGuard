@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 深色圆底 -->
+    <path
+        android:fillColor="#12141A"
+        android:pathData="M54,20 A34,34 0 1,1 53.9,20 Z" />
+    <!-- 一页纸 -->
+    <path
+        android:fillColor="#5B9DFF"
+        android:pathData="M40,34 L62,34 L70,42 L70,74 L40,74 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,48 L66,48 L66,51 L44,51 Z M44,55 L66,55 L66,58 L44,58 Z M44,62 L58,62 L58,65 L44,65 Z" />
+    <!-- 右下角记录点 -->
+    <path
+        android:fillColor="#3ECF8E"
+        android:pathData="M74,68 m-9,0 a9,9 0 1,1 18,0 a9,9 0 1,1 -18,0" />
+    <path
+        android:fillColor="#12141A"
+        android:pathData="M70,68 L73,71 L79,64 L81,66 L73,74 L68.5,69.5 Z" />
+</vector>

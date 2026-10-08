@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#12141A</color>
+    <color name="accent">#5B9DFF</color>
+    <color name="ok">#3ECF8E</color>
+    <color name="warn">#E8B34B</color>
+    <color name="bad">#E8654F</color>
+    <color name="panel">#1B1F28</color>
+    <color name="fg">#E8ECF3</color>
+    <color name="dim">#8B95A7</color>
+</resources>

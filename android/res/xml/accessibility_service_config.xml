@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  采集范围：只监听 TEXT_CHANGED（文本变化）与 WINDOW_STATE_CHANGED（换窗口时确定当前 App）。
+  flags：
+    flagRetrieveInteractiveWindows —— 需要读取窗口内容才能拿到输入框文本
+    flagReportViewIds              —— 用 viewId 区分同屏多个输入框
+    flagIncludeNotImportantViews   —— 有些 App 的输入框被标成“不重要”，不带上就漏记
+  注意：故意不申请 flagRequestFilterKeyEvents（那需要更高的系统权限，且会记录按键本身）。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewTextChanged|typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/service_description"
+    android:notificationTimeout="50"
+    android:settingsActivity="com.draftguard.MainActivity" />

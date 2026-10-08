@@ -1,0 +1,29 @@
+# Build artifacts
+build/
+*.apk
+*.idsig
+*.zip
+
+# Signing material — never commit keys
+*.keystore
+*.jks
+keystore.properties
+*.pepk
+
+# Android / IDE
+.gradle/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Recorded data (should never be inside the repo, but just in case)
+data/
+*.jsonl
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini

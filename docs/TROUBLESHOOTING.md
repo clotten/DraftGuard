@@ -1,0 +1,165 @@
+# Troubleshooting
+
+Every entry below is a bug that actually happened while building DraftGuard, written as
+**symptom → root cause → fix**. They're kept because the reasoning is more useful than the
+patches.
+
+---
+
+## 1. Nothing at all was recorded, in any app
+
+**Symptom.** Typing in WeChat produced zero records. The app's live preview stayed empty.
+
+**Root cause.** The service only processed a text-change event when the event carried its own
+node *and* that node reported `isEditable()`:
+
+```java
+node = event.getSource();
+if (node == null || !node.isEditable()) return;   // gives up too early
+```
+
+On Android 11+ `AccessibilityEvent.getSource()` frequently returns `null`. When it does, the
+event was dropped silently — no log, no diagnostic, no hint on screen.
+
+**Fix.** Three fallbacks, tried in order:
+
+1. The node attached to the event (fast path)
+2. `getRootInActiveWindow().findFocus(FOCUS_INPUT)` — the focused editable node
+3. A depth-limited tree walk for the first visible editable node
+
+Plus a 900 ms polling pass over the active window, because some apps barely emit
+`TYPE_VIEW_TEXT_CHANGED` at all. Polling produces no duplicate records since storage de-duplicates
+by content.
+
+---
+
+## 2. An app's records were written but could not be searched or listed
+
+**Symptom.** The live preview showed text typed in WeChat, and the day's total row count
+increased — but WeChat never appeared in the per-app list, and searching for the exact text
+returned nothing.
+
+**Root cause.** The search limit was used as a *per-file* cap while being written as a
+*total* cap:
+
+```java
+for (File f : files) {
+    readFile(f, query, out, limit);
+    if (out.size() >= limit) return;   // abandons every remaining file
+}
+```
+
+The app's own file had accumulated ~190 rows of noise and sorted first. It filled the 60-result
+budget on its own, the loop returned, and the WeChat file was never opened.
+
+**Fix.** Treat `limit` as an increment across files: each file only contributes the remaining
+budget, and the loop stops only when the budget is globally exhausted.
+
+**Regression test.** `StoreTest` writes 150 noise rows to file A and one WeChat record to file B,
+then searches with a limit of 60. The old code could not find file B; it now must.
+
+> Worth noting: the first attempt at this fix deleted the limit check entirely and returned 150
+> results. The test caught that too. A regression test that pins down *both* the bug and the
+> over-correction is worth the ten lines.
+
+---
+
+## 3. App labels never appeared, and the index vanished on restart
+
+**Symptom.** The per-app list showed `com.tencent.mm` instead of 微信, and after restarting the
+app the name index was empty.
+
+**Root causes.** Three separate mistakes stacked:
+
+1. `putAppLabel()` wrote to the file but never updated the in-memory cache, so the next read
+   returned the stale value.
+2. A first-write placeholder stored an *empty* label (`indexPut(app, "")`), which then blocked
+   the real label because "the key already exists".
+3. The index was written via `temp file → renameTo(target)`, and the `renameTo` result was
+   ignored inside an empty `catch`. On some devices the rename fails; the failure was invisible.
+
+**Fix.** Update the cache on write, never persist empty labels, and write the index directly
+(truncate + write + `fsync`) with errors surfaced in the UI instead of swallowed.
+
+---
+
+## 4. Deletions were recorded; the app's own input box was not
+
+**Symptom.** Every backspace created a new record. Meanwhile, typing in DraftGuard's own search
+box recorded nothing.
+
+**Root cause.** Two design decisions that turned out wrong:
+
+- Every text change was persisted, so shortening the text counted as a version.
+- The app's own package name was in the skip list (to keep diagnostics out of the log), which
+  also excluded the user's own typing.
+
+**Fix.** Treat "text got shorter" as a deletion and skip it — with two edge cases handled:
+reverse-append IMEs can emit same-length-different-content updates (not a deletion), and a
+leading-character mismatch with a length jump is insertion, not deletion. The skip list no longer
+contains the app itself; only system UI and the IME's own window events are filtered.
+
+Deleting text does **not** remove the last stored version — if the app crashes right after a
+delete, the pre-delete text is still on disk.
+
+---
+
+## 5. Placeholder text and single-character debris filled the log
+
+**Symptom.** Rows like `搜索记录过的文字…` (the search box's hint) and hundreds of one-character
+entries appeared as if they were user input.
+
+**Root cause.** When a field is empty, some OEM accessibility implementations return the *hint*
+from `getText()` instead of an empty string. And short flickers — type one character, delete it —
+still counted as activity.
+
+**Fix.** If `getText()` is empty but `getHintText()` is not, treat the field as empty. Known
+placeholder prefixes are filtered, and a configurable minimum length (default 2 chars) applies to
+freshly-seen fields.
+
+---
+
+## 6. System-level: MIUI/HyperOS delivered no events from other apps
+
+**Symptom.** Diagnostics showed plenty of events — but all from the input method and the app
+itself. `com.tencent.mm` never appeared. Later, after permissions were granted, WeChat events
+started arriving normally.
+
+**Root cause.** Not a code bug. MIUI blocks third-party accessibility services from reading other
+apps until the user grants extra permissions. The tell-tale sign: **events arrive from the IME
+window but never from any ordinary app.**
+
+**Fix (user action).**
+
+1. Settings → Apps → DraftGuard → ⋮ → **Allow restricted settings** (Android 13+)
+2. Settings → Apps → DraftGuard → **Autostart**: on; **Battery saver**: unrestricted
+3. Re-check the accessibility toggle, then reboot the phone — MIUI sometimes applies the grant
+   only after a restart
+
+The in-app **diagnostic panel** distinguishes these cases directly: it lists every package that
+has sent events, and reports the WeChat package specifically.
+
+---
+
+## Android pitfalls worth remembering
+
+- **`getSource()` is unreliable on Android 11+.** Always have a fallback to the active window.
+- **`isPassword()` is the reliable password signal.** The OS also masks the text, but checking
+  first means the content never reaches app memory.
+- **`android.jar` is stubs.** Calling `org.json` (or anything else framework-provided) on a plain
+  JVM throws `RuntimeException: Stub!`. DraftGuard ships its own minimal JSON writer/parser so the
+  storage layer stays testable off-device.
+- **`renameTo` can fail silently.** Check the return value, or don't use it for small files.
+
+## Build pitfalls (no-Gradle toolchain)
+
+- **`sources.txt` must have no BOM.** PowerShell 5.1's `Set-Content -Encoding UTF8` adds one, and
+  `javac` reports `invalid flag` / "invalid file name". Use
+  `[IO.File]::WriteAllLines(path, lines, UTF8Encoding($false))`.
+- **`core-lambda-stubs.jar` belongs on the bootclasspath** or lambda expressions fail to compile
+  with `cannot find symbol: method metafactory`.
+- **`d8` requires its output directory to already exist** (`Invalid output` otherwise).
+- **Do not set `$ErrorActionPreference='Stop'`** in the build script: PowerShell 5.1 turns a native
+  tool's ordinary stderr (keytool and aapt2 both write to it) into a terminating exception.
+- **`javac` parses `\u` inside comments** and fails with "illegal unicode escape".
+- **Mind CRLF in the project files** when doing multi-line string replacement from PowerShell.
