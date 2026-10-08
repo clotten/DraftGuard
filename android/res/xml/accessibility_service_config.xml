@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  采集范围：只监听 TEXT_CHANGED（文本变化）与 WINDOW_STATE_CHANGED（换窗口时确定当前 App）。
+  采集范围：TEXT_CHANGED（文本变化）、WINDOW_STATE_CHANGED（换窗口）、
+  VIEW_CLICKED（点击"发送"按钮 —— 这是判定"一条消息发完了"最可靠的信号）。
   flags：
     flagRetrieveInteractiveWindows —— 需要读取窗口内容才能拿到输入框文本
     flagReportViewIds              —— 用 viewId 区分同屏多个输入框
@@ -8,7 +9,7 @@
   注意：故意不申请 flagRequestFilterKeyEvents（那需要更高的系统权限，且会记录按键本身）。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeViewTextChanged|typeWindowStateChanged"
+    android:accessibilityEventTypes="typeViewTextChanged|typeWindowStateChanged|typeViewClicked"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"

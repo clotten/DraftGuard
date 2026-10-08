@@ -154,6 +154,21 @@ public class BurstTest {
         check("短句微调不算整段重写", !Burst.isFullRewrite("你好呀我", "你好呀我很"), "误判为重写");
         check("换句子算整段重写", Burst.isFullRewrite("第一句话在这里哦", "完全不同的另一段内容"), "未识别");
 
+        System.out.println("\n== 12. 点了发送 ⇒ 必须分段（最可靠的判据）==");
+        SendBoundary.resetForTest();
+        List<LogStore.Row> rows12 = new ArrayList<LogStore.Row>();
+        LogStore.Row r1 = row(APP, F, "你好呀", 1);
+        LogStore.Row r2 = row(APP, F, "你好呀我很饿", 0);
+        rows12.add(r1);
+        rows12.add(r2);
+        // 无发送信号时：共同开头很长 → 合并为一段
+        check("无发送信号时相似内容合并", Burst.group(rows12).size() == 1, dump(Burst.group(rows12)));
+        // 伪造"在 r1 之后点了发送" → 必须分段
+        SendBoundary.markForTest(Burst.msOf(r1.ts) + 1, APP);
+        List<Burst> seg = Burst.group(rows12);
+        check("有发送信号时必须分段", seg.size() == 2, dump(seg));
+        SendBoundary.resetForTest();
+
         System.out.println("\n== 11. 占位文字识别（小米笔记那条默认文本）==");
         check("小米笔记默认文本被识别", PlainText.isPlaceholder("开始书写或 创建思维笔记"), "漏了");
         check("带省略号也识别", PlainText.isPlaceholder("开始书写…"), "漏了");

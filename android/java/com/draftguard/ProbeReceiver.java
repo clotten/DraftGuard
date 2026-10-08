@@ -117,7 +117,8 @@ public class ProbeReceiver extends BroadcastReceiver {
                 + " sourceNull=" + TypelogService.evSourceNull
                 + " notEditable=" + TypelogService.evNotEditable
                 + " traverseHit=" + TypelogService.evTraverseHit
-                + " relaxedHit=" + TypelogService.evRelaxedHit);
+                + " relaxedHit=" + TypelogService.evRelaxedHit
+                + " sendBoundaries=" + TypelogService.sendBoundaries);
 
         Log.i(TAG, "skipped: noFocus=" + TypelogService.skippedNoFocus
                 + " delete=" + TypelogService.skippedDelete

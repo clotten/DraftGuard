@@ -173,6 +173,20 @@ public class TypelogService extends AccessibilityService {
             sendStatsThrottled();
             return;
         }
+        // 「点了发送」是最可靠的消息边界信号 —— 比靠文本形态倒推靠谱得多。
+        // 之前只订阅了文本变化，导致"发送"这个动作完全不可见，
+        // 只能用共同开头长度去猜"是改字还是新消息"，反复出错。
+        if (type == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            if (isSendButton(event)) {
+                long now = System.currentTimeMillis();
+                if (now - lastSendAt > 500) {     // 防抖：一次点击可能触发多个事件
+                    lastSendAt = now;
+                    markSendBoundary(event.getPackageName() == null ? ""
+                            : event.getPackageName().toString());
+                }
+            }
+            return;
+        }
         if (type != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             return;
         }
@@ -569,6 +583,10 @@ public class TypelogService extends AccessibilityService {
     }
 
     private long lastUiAt;
+    /** 最近一次"发送"点击时间（防抖：一次点击可能触发多个事件） */
+    private long lastSendAt;
+    /** 检测到的"发送"点击次数（消息边界信号，仅用于诊断显示） */
+    public static volatile long sendBoundaries;
     /** 诊断环形缓冲：把原始事件记下来，导出日志时能看到"系统到底给了什么" */
     static final java.util.List<String> DIAG =
             java.util.Collections.synchronizedList(new java.util.ArrayList<String>());
@@ -726,6 +744,70 @@ public class TypelogService extends AccessibilityService {
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    /** 判断被点击的是不是"发送"类按钮 */
+    private static boolean isSendButton(AccessibilityEvent event) {
+        String label = "";
+
+        // 先看节点（可用时最准）
+        AccessibilityNodeInfo node = null;
+        try {
+            node = event.getSource();
+        } catch (Throwable ignored) {
+        }
+        if (node != null) {
+            try {
+                CharSequence t = node.getText();
+                if (t != null) {
+                    label = t.toString();
+                }
+            } catch (Throwable ignored) {
+            }
+            if (label.isEmpty()) {
+                try {
+                    CharSequence d = node.getContentDescription();
+                    if (d != null) {
+                        label = d.toString();
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+            if (label.isEmpty()) {
+                try {
+                    CharSequence id = node.getViewIdResourceName();
+                    if (id != null) {
+                        label = id.toString();
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+
+        // 节点拿不到时退回**事件自带的文本**。
+        // 微信的 getSource() 在点击事件上同样返回 null，但事件里带着按钮文字：
+        //   ev: 1 com.tencent.mm android.widget.Button [发送]
+        // （修文本变化时已经吃过这个亏，这里差点又踩一遍。）
+        if (label.isEmpty()) {
+            label = eventText(event);
+            if (label == null) {
+                label = "";
+            }
+        }
+
+        label = label.trim();
+        if (label.isEmpty() || label.length() > 12) {
+            return false;
+        }
+        return label.equals("发送") || label.equals("Send") || label.equals("send")
+                || label.equals("发出") || label.equals("提交")
+                || label.contains("send") || label.endsWith("send");
+    }
+    /** 记录一次"发送"边界；下一条文本事件将另起一段 */
+    private void markSendBoundary(String pkg) {
+        SendBoundary.mark(pkg);      // 写入纯类，供 Burst 判段（避免 Burst 依赖 Android 服务）
+        sendBoundaries++;
+        Log.i(TAG, "检测到发送：pkg=" + pkg + " 累计=" + sendBoundaries);
     }
 
     private static void counted(java.util.Map<String, Integer> m, CharSequence pkg) {
@@ -1069,4 +1151,12 @@ public class TypelogService extends AccessibilityService {
         return out;
     }
 
+
+    /**
+     * 这条记录之后是否发生过"发送"点击。
+     *
+     * 这是最可靠的消息边界信号：用户点了发送 ⇒ 上一条消息结束。
+     * 相比之下"靠文本形态猜是改字还是新消息"总会出错
+     * （微信发消息不产生空状态，文本直接从旧消息跳到新消息）。
+     */
 }

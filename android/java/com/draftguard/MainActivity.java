@@ -239,6 +239,8 @@ public class MainActivity extends Activity {
             sb.append("跳过系统UI/不可记录包：").append(TypelogService.skippedSelf).append("\n");
             sb.append("跳过输入法键盘自身事件：").append(TypelogService.skippedIme).append("\n");
             sb.append("跳过删除操作(按设置)：").append(TypelogService.skippedDelete).append("\n");
+            sb.append("检测到点击「发送」：").append(TypelogService.sendBoundaries)
+              .append(" 次（消息分段依据）\n");
             sb.append("跳过未聚焦的框：").append(TypelogService.skippedNoFocus).append("\n");
             sb.append("跳过占位提示/单字碎片：").append(TypelogService.skippedNoise).append("\n");
             sb.append("跳过(设置里排除的)：").append(TypelogService.skippedIgnored).append("\n");

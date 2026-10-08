@@ -117,6 +117,12 @@ final class Burst {
         if (msOf(next.firstTs) - msOf(cur.lastTs) > GAP_MS) {
             return false;
         }
+        // 首要判据：两次文本之间用户是否点过"发送"。
+        // 点过 ⇒ 上一条消息结束，必定分段（这是真信号，不是猜的）。
+        if (SendBoundary.sendAfter(cur.lastTs)) {
+            return false;
+        }
+
         String a = cur.text == null ? "" : cur.text;
         String b = next.text == null ? "" : next.text;
 
