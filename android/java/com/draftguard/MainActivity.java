@@ -66,8 +66,19 @@ public class MainActivity extends Activity {
         @Override
         public void onReceive(Context context, Intent intent) {
             refreshLive();
+            // 统计卡片原来只在 onResume 时刷新，结果记录在涨、卡片却停在启动那一刻，
+            // 看起来像"什么都没记"。这里让它跟着记录走，但节流以免频繁读盘。
+            long now = System.currentTimeMillis();
+            if (now - lastStatsRefresh > STATS_REFRESH_MS) {
+                lastStatsRefresh = now;
+                refreshAll();
+            }
         }
     };
+
+    /** 统计卡片刷新节流间隔 */
+    private static final long STATS_REFRESH_MS = 2000;
+    private long lastStatsRefresh;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -92,6 +103,7 @@ public class MainActivity extends Activity {
         } else {
             registerReceiver(statsReceiver, f);
         }
+        lastStatsRefresh = System.currentTimeMillis();
         refreshAll();
     }
 
@@ -527,6 +539,9 @@ public class MainActivity extends Activity {
                         + tail(last.text, 120) + "\n";
             }
             final String stats = "今天落盘版本数：" + total + "（这是从磁盘读出来的）\n"
+                    + (total == 0
+                        ? "当前没有任何记录。若刚清空过，属正常；否则去任意 App 打字，几秒后这里会变。\n"
+                        : "")
                     + "其中输入法未上屏状态：" + compCount + " 条（也存了）\n"
                     + "已跳过密码框次数：" + TypelogService.skippedPassword + "\n"
                     + "写入失败：" + TypelogService.errors
@@ -544,8 +559,11 @@ public class MainActivity extends Activity {
     private void refreshStatus() {
         boolean on = isServiceEnabled();
         String head = on ? "● 已开启，正在记录" : "○ 未开启";
+        // 注意区分两套数字：这里是"本次会话"的计数器（服务重启会归零），
+        // 下面「统计」卡片是"从磁盘读出来的"历史总量。混在一起看容易误以为没记录。
         String tail = on
-                ? "\n每条记录的保存时机：你每敲一下 → 350 毫秒内落盘。"
+                ? "\n下面「统计」里的版本数才是磁盘上的历史总量。"
+                  + "\n每条记录的保存时机：你每敲一下 → 350 毫秒内落盘。"
                   + "\n换 App、切后台、锁屏都不会中断。"
                 : "\n点下面的按钮，到系统的无障碍列表里打开「字迹留存」。"
                   + "\n开启后本应用可以长期驻留，不会因为你划掉界面就停止。";
@@ -570,7 +588,7 @@ public class MainActivity extends Activity {
         setCard(liveView, "实时预览（最近一次输入）", body);
         setCard(statusView, "采集状态",
                 (isServiceEnabled() ? "● 已开启，正在记录" : "○ 未开启")
-                + "\n累计落盘 " + TypelogService.written + " 条"
+                + "\n本次会话落盘 " + TypelogService.written + " 条（服务重启会归零，历史记录不会丢）"
                 + "　收到事件 " + TypelogService.evAll
                 + "（文本变化 " + TypelogService.evText + "）"
                 + "\n取到文本 " + TypelogService.evCaptured
@@ -797,7 +815,8 @@ public class MainActivity extends Activity {
             final long bytes = store.totalBytes();
             ui.post(() -> new android.app.AlertDialog.Builder(this)
                     .setTitle("清除全部记录")
-                    .setMessage("当前共有 " + total + " 条记录，占用约 " + (bytes / 1024) + " KB。\n\n"
+                    .setMessage("当前共有 " + total + " 条记录，占用约 "
+                            + (bytes < 1024 ? bytes + " 字节" : (bytes / 1024) + " KB") + "。\n\n"
                             + "清空前会自动备份到「下载 / DraftGuard / backup」，"
                             + "随时可以用文件管理器取回。\n\n确定要清空吗？")
                     .setNegativeButton("取消", null)
