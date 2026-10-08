@@ -156,7 +156,7 @@ public class TypelogService extends AccessibilityService {
             String d = event.getEventType() + " " + event.getPackageName() + " "
                     + event.getClassName() + " " + event.getText();
             synchronized (DIAG) {
-                if (DIAG.size() > 60) {
+                if (DIAG.size() > 300) {
                     DIAG.remove(0);
                 }
                 DIAG.add(d);
