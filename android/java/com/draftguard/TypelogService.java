@@ -462,7 +462,7 @@ public class TypelogService extends AccessibilityService {
         // 占位提示文字不是用户输入（部分系统把 hint 当作文本回传）。
         // 注意：数据库里存的是 hint 原文 "搜索记录过的文字"，结尾的省略号是界面显示时才加的，
         // 所以这里必须按不含省略号的形式比对 —— 之前按含省略号比对，一直没拦住。
-        if (isPlaceholder(text)) {
+        if (PlainText.isPlaceholder(text)) {
             skippedNoise++;
             return;
         }
@@ -526,6 +526,11 @@ public class TypelogService extends AccessibilityService {
             }
             // 新建的输入框里只有一个字符：多半是打了一个字又立刻删掉的碎片，不占记录
             if (Prefs.minChars(this) > 1 && p.chars == 0 && text.trim().length() < 2) {
+                skippedNoise++;
+                return;
+            }
+            // 输入框的首条记录若是"默认占位文字"，不记录
+            if (p.chars == 0 && PlainText.looksLikeEmptyFieldHint(text)) {
                 skippedNoise++;
                 return;
             }
@@ -676,33 +681,17 @@ public class TypelogService extends AccessibilityService {
      * 踩过的坑：库里存的是 hint 原文（"搜索记录过的文字"），结尾的省略号是界面显示时才加的。
      * 曾经按含省略号的字符串比对，结果一条都没拦住。
      */
-    private static boolean isPlaceholder(String text) {
-        if (text == null) {
-            return false;
-        }
-        String t = text.trim();
-        if (t.isEmpty()) {
-            return false;
-        }
-        // 去掉尾部省略号再比，兼容 hint 原文与界面显示两种形态
-        String bare = t.replaceAll("[.…。]+$", "").trim();
-        if (bare.isEmpty()) {
-            return false;
-        }
-        if (bare.startsWith("搜索记录过的文字") || bare.startsWith("在这里打字")) {
-            return true;
-        }
-        // 聊天类应用空输入框的提示语（各家叫法不同，覆盖常见几种）
-        if (bare.equals("发消息") || bare.equals("发送消息") || bare.equals("说点什么")
-                || bare.equals("说点什么吧") || bare.equals("聊点什么") || bare.equals("输入消息")
-                || bare.equals("请输入") || bare.equals("请输入内容") || bare.equals("输入内容")
-                || bare.equals("搜索") || bare.equals("输入…")) {
-            return true;
-        }
-        // "搜索"/"输入"开头的短提示；限制长度避免误伤用户真打的句子
-        return (bare.startsWith("搜索") || bare.startsWith("输入")) && bare.length() <= 6;
-    }
-
+    /**
+     * 输入框默认占位文字的兜底判定。
+     *
+     * 小米笔记的「开始书写或 创建思维笔记」有两个坑：
+     *   1) 它出现在**第一个文本事件**里、且是那个输入框有史以来第一条记录；
+     *   2) 它有多种变体（不同机型/语言/版本措辞不同），靠关键词列表补不完。
+     * 所以再加一条形态特征：以"开始/创建/点击/请…"这类祈使词开头，
+     * 带不带空格都算，且长度不长。
+     *
+     * 只在"这个输入框的第一条记录"上生效，正常书写几乎不会误伤。
+     */
     /**
      * 是否只记录"当前有输入焦点"的输入框。
      *
@@ -838,22 +827,23 @@ public class TypelogService extends AccessibilityService {
 
     private static String readText(AccessibilityNodeInfo node, AccessibilityEvent event) {
         CharSequence t = null;
+        CharSequence hint = null;
         if (node != null) {
             try {
-                // 输入框为空时，部分系统的无障碍会把"占位提示文字"当作文本返回。
-                // 那时 getText() 为空、而 hint 非空，据此排除，免得把提示语当成用户输入。
-                if (TextUtils.isEmpty(node.getText())) {
-                    CharSequence hint = null;
-                    try {
-                        hint = node.getHintText();
-                    } catch (Throwable ignored) {
-                    }
-                    if (!TextUtils.isEmpty(hint)) {
-                        return "";
-                    }
-                }
+                hint = node.getHintText();
+            } catch (Throwable ignored) {
+            }
+            try {
                 t = node.getText();
             } catch (Throwable ignored) {
+            }
+            // 输入框为空时，部分系统的无障碍会把"占位提示文字"当作文本返回
+            // （小米笔记就是：getText() 直接给出「开始书写或 创建思维笔记」）。
+            // 所以要在**拿到文本之后**跟 hint 比对，而不是只在 getText() 为空时才看 hint
+            // —— 之前那样写，遇到"getText() 返回 hint"的机型就完全失效。
+            if (!TextUtils.isEmpty(t) && !TextUtils.isEmpty(hint)
+                    && t.toString().trim().equals(hint.toString().trim())) {
+                return "";
             }
             if (TextUtils.isEmpty(t)) {
                 // 有些输入框的文本挂在子节点上
@@ -1078,4 +1068,5 @@ public class TypelogService extends AccessibilityService {
         }
         return out;
     }
+
 }

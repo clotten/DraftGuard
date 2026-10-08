@@ -147,6 +147,15 @@ public class BurstTest {
         check("短句微调不算整段重写", !Burst.isFullRewrite("你好呀我", "你好呀我很"), "误判为重写");
         check("换句子算整段重写", Burst.isFullRewrite("第一句话在这里哦", "完全不同的另一段内容"), "未识别");
 
+        System.out.println("\n== 11. 占位文字识别（小米笔记那条默认文本）==");
+        check("小米笔记默认文本被识别", PlainText.isPlaceholder("开始书写或 创建思维笔记"), "漏了");
+        check("带省略号也识别", PlainText.isPlaceholder("开始书写…"), "漏了");
+        check("真正的输入不被误判", !PlainText.isPlaceholder("这是测试"), "误伤");
+        check("长句子不被误判", !PlainText.isPlaceholder("好耶我做了个小软件能记录手机上打的字"), "误伤");
+        check("空输入框首条占位被拦", PlainText.looksLikeEmptyFieldHint("开始书写或 创建思维笔记"), "漏了");
+        check("正常内容不被形态特征误伤", !PlainText.looksLikeEmptyFieldHint("今天天气不错"), "误伤");
+        check("以开始结尾的正常短句不误伤", !PlainText.looksLikeEmptyFieldHint("会议开始了"), "误伤");
+
         System.out.println("\n结果：通过 " + pass + " 项，失败 " + fail + " 项");
         System.exit(fail == 0 ? 0 : 1);
     }
