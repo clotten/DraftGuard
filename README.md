@@ -142,6 +142,7 @@ One JSON object per line, one line per version:
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — real bugs hit during development,
   each as symptom → root cause → fix, plus the Android/MIUI pitfalls behind them
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — why accessibility, why snapshots, why per-minute
+- [`docs/REMOTE-DEBUG.md`](docs/REMOTE-DEBUG.md) — connecting over ADB wireless debugging, plus the in-app diagnostic probe that makes remote triage possible
 - [`PROJECT_STATE.md`](PROJECT_STATE.md) — current status, verified list, known issues, roadmap
 
 ## Known limitations
