@@ -262,6 +262,13 @@ public class MainActivity extends Activity {
                 }
             }
 
+            // 主动报警：焦点过滤如果过严，表现就是"跳过数一直涨、却一条都没记到"
+            if (TypelogService.skippedNoFocus >= 20 && TypelogService.evCaptured == 0) {
+                sb.append("\n⚠ 注意：已跳过 ").append(TypelogService.skippedNoFocus)
+                  .append(" 个未聚焦的框，但一条都没记到 ——");
+                sb.append("\n   焦点过滤可能对本机过严。到「设置」里把");
+                sb.append("\n   「只记录有焦点的输入框」关掉试试，能记到就说明是判断失灵。\n");
+            }
             sb.append("\n怎么读：\n");
             sb.append("· 事件总数一直是 0 → 无障碍服务没真正启用\n");
             sb.append("· 只有本应用/输入法的事件，别的 App 一条都没有 → 系统拦截了本服务读取其他应用\n");

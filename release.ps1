@@ -32,11 +32,9 @@ if (-not $Version) {
     elseif ($desc) { $Version = "0.0.0-$desc" }
     else { $Version = '2.0.0' }
 }
-$versionCode = 1
-if ($Version -match '^(\d+)\.(\d+)\.(\d+)') {
-    $versionCode = [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
-}
-Write-Host "版本号: $Version  (versionCode $versionCode)" -ForegroundColor Cyan
+# versionCode 由 build-apk.ps1 按同一公式从版本号推算（major*10000 + minor*100 + patch），
+# 保证"版本号变大 = versionCode 变大"，不会出现装了旧版覆盖不了新版的情况。
+Write-Host "版本号: $Version" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------- 密钥
 if ($NewKey -or -not (Test-Path $KeyStore)) {
@@ -55,7 +53,7 @@ $out = "DraftGuard-$Version.apk"
     -Sdk $Sdk -Bt $Bt -Plat $Plat `
     -OutName $out `
     -KeyStore $KeyStore -KeyAlias $KeyAlias -StorePass $StorePass `
-    -VersionCode $versionCode -VersionName $Version
+    -VersionName $Version
 
 if (-not (Test-Path "$root\$out")) { throw "构建失败，没有产物：$out" }
 
@@ -64,7 +62,7 @@ Write-Host ""
 Write-Host "================ 可发布的 APK ================" -ForegroundColor Green
 Write-Host "文件：$root\$out"
 Write-Host "大小：$size KB"
-Write-Host "版本：$Version (versionCode $versionCode)"
+Write-Host "版本：$Version"
 Write-Host ""
 Write-Host "发布包已就绪（本仓库只保存代码，APK 不入库）"
 Write-Host "  需要分发时把 $out 传到网盘或自己的下载渠道即可"

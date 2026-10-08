@@ -163,3 +163,16 @@ has sent events, and reports the WeChat package specifically.
   tool's ordinary stderr (keytool and aapt2 both write to it) into a terminating exception.
 - **`javac` parses `\u` inside comments** and fails with "illegal unicode escape".
 - **Mind CRLF in the project files** when doing multi-line string replacement from PowerShell.
+
+---
+
+## Versioning
+
+`versionCode` is derived from the version name: `major*10000 + minor*100 + patch`
+(so `2.0.1` → `20001`). Both `build-apk.ps1` and `release.ps1` use the same derivation, because a
+manually-chosen `versionCode` that doesn't grow with the version name causes Android to reject the
+install as a downgrade — an easy mistake to make when the two numbers are maintained separately.
+
+Also worth knowing: **the package name is part of an app's identity.** Renaming
+`com.typelog.recorder` → `com.draftguard` made every earlier build a different app, so it cannot be
+upgraded in place; the old one must be uninstalled first.

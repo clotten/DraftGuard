@@ -327,7 +327,7 @@ public class TypelogService extends AccessibilityService {
      * 拿到一份文本后的记录流程（事件路径与轮询路径共用）。
      * 这里做去抖：连打时只保留最后一次，350ms 后落盘的是最新那一版，不会丢字。
      */
-    private void handleText(String pkg, AccessibilityNodeInfo node, String text) {
+    private void handleText(String pkg, AccessibilityNodeInfo focusedNode, String text) {
         if (LogStore.isSkippedPackage(pkg) || Prefs.isIgnored(this, pkg)) {
             skippedOther++;
             return;
@@ -338,15 +338,17 @@ public class TypelogService extends AccessibilityService {
         if (text.isEmpty() && !Prefs.keepEmpty(this)) {
             return;
         }
-        final boolean comp = isComposing(node, text);
-        final String field = fieldKey(node, pkg);
-
-        // 一个字节都读不到时，宁愿这一版漏掉，也不能把已有内容覆盖成空
-        // 只记"正在输入的框"：后台框、隐藏旧框、只显示占位提示的框一律不进记录
-        if (Prefs.focusOnly(this) && !isActiveInput(node)) {
+        // 只记"正在输入的框"。放在这里而不是更前面，是为了让它统计到的
+        // 全是"确实有文本、但那个框没有焦点"的情况 —— 这正是需要排查的信号。
+        // （参数名曾经和下面的局部变量重名，导致误用了事件节点，已改名避免再踩。）
+        if (Prefs.focusOnly(this) && !isActiveInput(focusedNode)) {
             skippedNoFocus++;
             return;
         }
+        final boolean comp = isComposing(focusedNode, text);
+        final String field = fieldKey(focusedNode, pkg);
+
+        // 一个字节都读不到时，宁愿这一版漏掉，也不能把已有内容覆盖成空
         if (text.isEmpty()) {
             synchronized (LOCK) {
                 Pending exist = pending.get(field);

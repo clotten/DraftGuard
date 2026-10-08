@@ -13,8 +13,10 @@ param(
     [string]$KeyStore = '',
     [string]$KeyAlias = 'typelog',
     [string]$StorePass = 'typelog123',
-    [int]$VersionCode = 1,
-    [string]$VersionName = '2.0.0'
+    # -1 表示"从 VersionName 自动推算"：major*10000 + minor*100 + patch
+    [string]$VersionName = '2.0.0',
+    # -1 = 从 VersionName 自动推算 versionCode（major*10000 + minor*100 + patch），避免两处规则打架
+    [int]$VersionCode = -1
 )
 
 # 注意：不能用 $ErrorActionPreference='Stop'。PowerShell 5.1 会把原生命令写到 stderr 的
@@ -55,6 +57,15 @@ function Invoke-Tool($file, [string[]]$argv, $errFile) {
     }
 }
 
+# versionCode：未显式指定时按 VersionName 推算，保证"版本号变大 = versionCode 变大"
+if ($VersionCode -lt 0) {
+    if ($VersionName -match '^(\d+)\.(\d+)\.(\d+)') {
+        $VersionCode = [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
+    } else {
+        $VersionCode = 1
+    }
+}
+Write-Host "版本：$VersionName (versionCode $VersionCode)" -ForegroundColor Cyan
 # ---------------------------------------------------------------- 准备目录
 Step '准备构建目录'
 Remove-Item -Recurse -Force $build -ErrorAction SilentlyContinue
