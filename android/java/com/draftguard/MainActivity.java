@@ -164,7 +164,11 @@ public class MainActivity extends Activity {
         expRow.setPadding(0, dp(10), 0, dp(20));
         root.addView(expRow);
 
-        Button btnExport = button("导出全部记录（zip）");
+        Button btnExportPub = button("导出到下载目录");
+        btnExportPub.setOnClickListener(v -> doExportToDownloads());
+        expRow.addView(btnExportPub);
+
+        Button btnExport = button("分享 zip");
         btnExport.setOnClickListener(v -> doExport());
         expRow.addView(btnExport);
 
@@ -654,6 +658,28 @@ public class MainActivity extends Activity {
         }, "typelog-today").start();
     }
 
+    /** 导出到公共下载目录：文件管理器能看到，也能被 adb 拉取 */
+    private void doExportToDownloads() {
+        toast("正在导出到「下载/DraftGuard」…");
+        new Thread(() -> {
+            LogStore store = new LogStore(getFilesDir(), 0);
+            final Uri uri = Exporter.toPublicDownloads(this, store.root());
+            ui.post(() -> {
+                if (uri == null) {
+                    toast("导出失败：无法写入下载目录");
+                    setCard(resultView, "导出结果",
+                            "导出失败。可以改用「分享 zip」发给微信/QQ。");
+                } else {
+                    String path = "下载/" + Exporter.PUBLIC_SUBDIR + "/DraftGuard-" + Exporter.stamp() + ".zip";
+                    toast("已导出到 " + path);
+                    setCard(resultView, "导出结果",
+                            "已导出到公共下载目录：\n" + path + "\n\n"
+                            + "用文件管理器打开「下载 / DraftGuard」就能看到这个 zip。");
+                }
+            });
+        }, "typelog-export-pub").start();
+    }
+
     private void doExport() {
         toast("正在打包…");
         new Thread(() -> {
@@ -661,37 +687,7 @@ public class MainActivity extends Activity {
             String err = null;
             try {
                 LogStore store = new LogStore(getFilesDir(), 0);
-                zip = new File(getCacheDir(), "typelog-export-"
-                        + new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date()) + ".zip");
-                try (ZipOutputStream zos = new ZipOutputStream(
-                        new BufferedOutputStream(new FileOutputStream(zip)))) {
-                    File[] days = store.root().listFiles();
-                    if (days != null) {
-                        for (File day : days) {
-                            if (!day.isDirectory()) {
-                                continue;
-                            }
-                            File[] files = day.listFiles();
-                            if (files == null) {
-                                continue;
-                            }
-                            for (File f : files) {
-                                if (!f.isFile()) {
-                                    continue;
-                                }
-                                zos.putNextEntry(new ZipEntry(day.getName() + "/" + f.getName()));
-                                try (FileInputStream in = new FileInputStream(f)) {
-                                    byte[] buf = new byte[8192];
-                                    int n;
-                                    while ((n = in.read(buf)) > 0) {
-                                        zos.write(buf, 0, n);
-                                    }
-                                }
-                                zos.closeEntry();
-                            }
-                        }
-                    }
-                }
+                zip = Exporter.toCache(this, store.root());
             } catch (Throwable t) {
                 err = t.toString();
             }

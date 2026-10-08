@@ -59,6 +59,13 @@ public class ProbeReceiver extends BroadcastReceiver {
                     Log.i(TAG, "flush: 记录文件每次写入都是即时 fsync，无需额外刷新");
                     doDumpCounters(context);
                     break;
+                case "export": {
+                    LogStore st = new LogStore(context.getFilesDir(), 0);
+                    android.net.Uri u = Exporter.toPublicDownloads(context, st.root());
+                    Log.i(TAG, "export -> " + (u == null ? "失败" : u.toString())
+                            + "  (Download/" + Exporter.PUBLIC_SUBDIR + ")");
+                    break;
+                }
                 case "dump":
                 default:
                     doDump(context);
