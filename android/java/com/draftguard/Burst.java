@@ -37,6 +37,11 @@ final class Burst {
     private static final double KEEP_RATIO = 0.5;
     /** 太短的文本（如"嗯""好"）不做重写判定，避免误拆 */
     private static final int MIN_LEN_FOR_REWRITE = 4;
+    /**
+     * 共同开头至少这么长，才认为"仍是同一条消息"。
+     * 用来区分"改错别字"（共同开头通常很长）与"连发另一条消息"（几乎没有共同开头）。
+     */
+    private static final int MIN_COMMON_PREFIX = 2;
 
     String app = "";
     String field = "";
@@ -115,23 +120,31 @@ final class Burst {
         String a = cur.text == null ? "" : cur.text;
         String b = next.text == null ? "" : next.text;
 
-        // 「输入框被清空」是一条消息结束的信号，绝不能跨越它合并。
-        //
-        // 聊天场景的实测问题：打「你好」→发送→打「在吗」→发送→打「哈哈」→发送，
-        // 如果允许跨越清空合并，前两条会被吞掉，只剩「哈哈」。
-        // 清空既可能是"发送后清空"，也可能是"全删重打"，前者必须分段；
-        // 后者若真是同一句话的修正，重新输入时会由于与原文相似而另行判断，
-        // 但**优先保证不吞消息**。
         if (a.isEmpty() && b.isEmpty()) {
-            return true;    // 连续清空：归并成一个边界标记，避免产生一堆空段
+            return true;    // 连续清空：归并成一个边界标记
         }
         if (a.isEmpty() || b.isEmpty()) {
-            return false;   // 清空是消息边界：空与非空永不合并
+            return false;   // 一侧清空：消息边界（有些应用会留下空状态）
+        }
+        // 延伸（往后打 / 退格）：同一条消息
+        if (b.startsWith(a) || a.startsWith(b)) {
+            return true;
+        }
+        // 整段重写：另一段话
+        if (isFullRewrite(a, b)) {
+            return false;
         }
 
-        return !isFullRewrite(a, b);
+        // 到这里是"中间改动"（改错别字）或"换了另一条消息"，两者形态相似，
+        // 用共同开头长度区分：
+        //   · 改错别字：共同开头通常很长（你好呀我 → 你好呀我很，共同 4 字）
+        //   · 连发消息：几乎没有共同开头（你好呀 → 小朋友，共同 0 字）
+        //
+        // 实测依据：微信发消息**不产生空状态事件**，文本会直接从旧消息跳到新消息：
+        //   ev: 16 EditText [你好] → [你好呀] → [小朋友]
+        // 所以"靠清空判边界"在微信里失效，只能靠共同开头这一形态特征。
+        return commonPrefix(a, b) >= MIN_COMMON_PREFIX;
     }
-
     /**
      * 是否"整段重写"（应视为另一段话）。
      *
