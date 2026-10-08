@@ -100,15 +100,38 @@ jobs:
           cp build/apk/base.apk build/apk/unsigned.apk
           (cd build/apk/dex && zip -q -X ../unsigned.apk classes.dex)
 
-          # 6. 对齐 + 签名（用 CI 临时密钥；正式发布用 secrets 里的密钥，见下方 release job）
+          # 6. 对齐
           "$BT/zipalign" -f -p 4 build/apk/unsigned.apk build/apk/aligned.apk
-          keytool -genkeypair -keystore build/apk/ci.keystore \
-            -alias draftguard -keyalg RSA -keysize 2048 -validity 10950 \
-            -storepass android -keypass android \
-            -dname "CN=DraftGuard CI, O=DraftGuard, C=CN" >/dev/null 2>&1
+
+      # ---------------------------------------------------------------- 签名
+      # 优先用仓库 secrets 里的正式密钥：这样 CI 出的包和本地 release.ps1 出的包
+      # 签名一致，可以互相覆盖升级。没配 secrets 时退回临时密钥（fork / PR 场景），
+      # 构建依然能通过，只是那个包不能覆盖已装版本。
+      - name: Sign APK
+        env:
+          BT: ${{ steps.sdk.outputs.build_tools }}
+          KS_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KS_B64:-}" ]; then
+            echo "使用仓库 secrets 中的正式签名密钥"
+            echo "$KS_B64" | base64 -d > build/apk/release.keystore
+            STORE_PASS="${KS_PASS:?缺少 RELEASE_STORE_PASSWORD}"
+            ALIAS="${KEY_ALIAS:-draftguard}"
+          else
+            echo "::warning::未配置 RELEASE_KEYSTORE_BASE64，本次使用临时密钥签名（不能覆盖已安装的正式版本）"
+            keytool -genkeypair -keystore build/apk/release.keystore \
+              -alias draftguard -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass android -keypass android \
+              -dname "CN=DraftGuard CI, O=DraftGuard, C=CN" >/dev/null 2>&1
+            STORE_PASS=android
+            ALIAS=draftguard
+          fi
           "$BT/apksigner" sign \
-            --ks build/apk/ci.keystore --ks-pass pass:android --key-pass pass:android \
-            --ks-key-alias draftguard \
+            --ks build/apk/release.keystore --ks-pass "pass:$STORE_PASS" \
+            --key-pass "pass:$STORE_PASS" --ks-key-alias "$ALIAS" \
             --v1-signing-enabled true --v2-signing-enabled true \
             --out DraftGuard-ci.apk build/apk/aligned.apk
           "$BT/apksigner" verify --print-certs DraftGuard-ci.apk | head -3

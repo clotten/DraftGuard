@@ -8,7 +8,13 @@ param(
     [string]$Sdk  = 'D:\android-sdk_r24.4.1-windows\android-sdk-windows',
     [string]$Bt   = '36.1.0',
     [string]$Plat = 'android-36',
-    [string]$OutName = 'DraftGuard-2.0.0.apk'
+    [string]$OutName = 'DraftGuard-2.0.0.apk',
+    # 签名相关：默认用仓库里的调试密钥；发布时由 release.ps1 传入正式密钥
+    [string]$KeyStore = '',
+    [string]$KeyAlias = 'typelog',
+    [string]$StorePass = 'typelog123',
+    [int]$VersionCode = 1,
+    [string]$VersionName = '2.0.0'
 )
 
 # 注意：不能用 $ErrorActionPreference='Stop'。PowerShell 5.1 会把原生命令写到 stderr 的
@@ -55,7 +61,6 @@ Remove-Item -Recurse -Force $build -ErrorAction SilentlyContinue
 foreach ($d in 'compiled-res', 'gen', 'classes', 'dex') {
     New-Item -ItemType Directory -Force -Path (Join-Path $build $d) | Out-Null
 }
-$keystore = Join-Path $root 'debug.keystore'
 $errLog   = Join-Path $build 'tool.err'
 
 # ---------------------------------------------------------------- 1. 资源
@@ -74,8 +79,8 @@ Invoke-Tool $Aapt2 @(
     '--java', $genDir,
     '--min-sdk-version', '26',
     '--target-sdk-version', '33',
-    '--version-code', '1',
-    '--version-name', '2.0.0',
+    '--version-code', "$VersionCode",
+    '--version-name', "$VersionName",
     '--auto-add-overlay',
     $resOut
 ) $errLog
@@ -142,14 +147,19 @@ $aligned = Join-Path $build 'aligned.apk'
 Invoke-Tool $ZipAlign @('-f', '-p', '4', $unsig, $aligned) $errLog
 
 # ---------------------------------------------------------------- 6. 签名
+if ([string]::IsNullOrWhiteSpace($KeyStore)) {
+    $keystore = Join-Path $root 'debug.keystore'
+} else {
+    $keystore = $KeyStore
+}
 if (-not (Test-Path $keystore)) {
-    Step '生成签名密钥（仅本机使用）'
+    Step "生成签名密钥：$keystore"
     Invoke-Tool $KeyTool @(
         '-genkeypair', '-keystore', $keystore,
-        '-alias', 'typelog', '-keyalg', 'RSA', '-keysize', '2048',
+        '-alias', $KeyAlias, '-keyalg', 'RSA', '-keysize', '2048',
         '-validity', '10950',
-        '-storepass', 'typelog123', '-keypass', 'typelog123',
-        '-dname', 'CN=typelog, OU=local, O=local, L=local, ST=local, C=CN'
+        '-storepass', $StorePass, '-keypass', $StorePass,
+        '-dname', "CN=DraftGuard, OU=local, O=local, L=local, ST=local, C=CN"
     ) $errLog
 }
 Step 'apksigner：签名（v1+v2，兼容老新安卓）'
@@ -158,9 +168,9 @@ if (Test-Path $final) { Remove-Item $final -Force }
 Invoke-Tool $ApkSigner @(
     'sign',
     '--ks', $keystore,
-    '--ks-pass', 'pass:typelog123',
-    '--key-pass', 'pass:typelog123',
-    '--ks-key-alias', 'typelog',
+    '--ks-pass', "pass:$StorePass",
+    '--key-pass', "pass:$StorePass",
+    '--ks-key-alias', $KeyAlias,
     '--v1-signing-enabled', 'true',
     '--v2-signing-enabled', 'true',
     '--out', $final,
@@ -175,6 +185,6 @@ $aapt = Join-Path $btDir 'aapt2.exe'
 $size = [math]::Round((Get-Item $final).Length / 1KB, 1)
 Write-Host "`n================ 构建成功 ================" -ForegroundColor Green
 Write-Host "APK：$final"
-Write-Host "大小：$size KB"
-Write-Host "签名密钥：$keystore（口令 typelog123，仅本机调试用）"
+Write-Host "大小：$size KB　版本：$VersionName ($VersionCode)"
+Write-Host "签名密钥：$keystore"
 Write-Host "==========================================" -ForegroundColor Green
