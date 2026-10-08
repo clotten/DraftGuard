@@ -85,7 +85,8 @@ public class ProbeReceiver extends BroadcastReceiver {
                 + " captured=" + TypelogService.evCaptured
                 + " sourceNull=" + TypelogService.evSourceNull
                 + " notEditable=" + TypelogService.evNotEditable
-                + " traverseHit=" + TypelogService.evTraverseHit);
+                + " traverseHit=" + TypelogService.evTraverseHit
+                + " relaxedHit=" + TypelogService.evRelaxedHit);
 
         Log.i(TAG, "skipped: noFocus=" + TypelogService.skippedNoFocus
                 + " delete=" + TypelogService.skippedDelete
@@ -138,6 +139,18 @@ public class ProbeReceiver extends BroadcastReceiver {
 
         // 设置快照：很多"没记录"其实是开关关着
         Map<String, String> ignored = null;
+        // 原始无障碍事件流：排查"某应用到底发了什么事件"的唯一手段
+        Log.i(TAG, "-- raw accessibility events (newest last) --");
+        java.util.List<String> diagEv = TypelogService.DIAG;
+        synchronized (diagEv) {
+            if (diagEv.isEmpty()) {
+                Log.i(TAG, "  (空：诊断日志未开启，或重启后还没收到事件)");
+            }
+            int s0 = Math.max(0, diagEv.size() - 30);
+            for (int i = s0; i < diagEv.size(); i++) {
+                Log.i(TAG, "  ev: " + diagEv.get(i));
+            }
+        }
         Log.i(TAG, "-- prefs --"
                 + " focusOnly=" + Prefs.focusOnly(context)
                 + " ignoreDeletions=" + Prefs.ignoreDeletions(context)

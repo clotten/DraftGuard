@@ -176,3 +176,56 @@ install as a downgrade — an easy mistake to make when the two numbers are main
 Also worth knowing: **the package name is part of an app's identity.** Renaming
 `com.typelog.recorder` → `com.draftguard` made every earlier build a different app, so it cannot be
 upgraded in place; the old one must be uninstalled first.
+---
+
+## 7. WeChat: events arrive with full text, but nothing is recorded
+
+This was the hardest one, and it invalidated several earlier assumptions.
+
+**Symptom.** WeChat sent plenty of events — the per-package counter showed
+`(text) com.tencent.mm = 9` — but `captured` stayed at 0 and no rows were written. The
+diagnostic read `notEditable=3`.
+
+**What the raw event dump showed** (read it carefully, everything is there):
+
+```
+ev: 16 com.tencent.mm android.widget.EditText [hell deepseekWECHAT_TEST_123]
+ev: 16 com.tencent.mm android.widget.EditText [he deepseekWECHAT_TEST_123]
+ev: 16 com.tencent.mm android.widget.EditText []
+ev: 16 com.tencent.mm android.widget.EditText [H]
+ev: 16 com.tencent.mm android.widget.EditText [HE]
+```
+
+`16` is `TYPE_VIEW_TEXT_CHANGED`. The class *is* `android.widget.EditText`. **And the event
+itself carries the input field's complete text.**
+
+**Root cause.** In WeChat, `event.getSource()` returns `null`, and
+`getRootInActiveWindow()` returns `null` too — on MIUI this combination is common. Every
+piece of node-based logic was therefore operating on nothing, no matter how permissive the
+node checks were. The text was sitting in the event all along.
+
+**Fix.** Add a final fallback that records from the **event's own text**, with no node at all:
+
+```java
+String evText = eventText(event);          // event.getText().get(0)
+if (evText != null && !evText.isEmpty()) {
+    handleText(pkg, null, evText);         // node == null is a supported path
+    return;
+}
+```
+
+Consequences of passing `node == null`:
+
+- the focus gate must pass (with no node, focus cannot be verified — and receiving a
+  text-change event with text *is* the signal that the user is typing)
+- `isComposing()` and `fieldKey()` must tolerate a null node; the field key becomes
+  `pkg + "#@event"`
+
+**Verification.** Typing `WX——OK我喜欢你deepseek最喜欢最喜欢你了` in WeChat produced seven
+records with monotonically growing text — Chinese and Latin mixed — all written to
+`com.tencent.mm.jsonl`. The delete filtering also did its job: `delete=7`, and none of those
+produced rows.
+
+**Lesson.** When a node-based path fails, dump the *event* before adding more node
+heuristics. All accessibility data that matters may be in the event, and an
+`AccessibilityEvent` needs no window access at all.

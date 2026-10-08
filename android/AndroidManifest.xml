@@ -39,12 +39,14 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- 诊断探针：仅在应用内开启"诊断日志"后响应，供 ADB 远程排查。
-             用法见 docs/TROUBLESHOOTING.md 的"远程调试"一节（adb shell am broadcast）。
-             不导出，其他应用无法调用。 -->
+        <!-- 诊断探针：供 ADB 远程排查，用法见 docs/REMOTE-DEBUG.md。
+             必须 exported="true"：否则连 ADB/shell（uid 2000）都发不进来，
+             会被 BroadcastQueue 以 "is not exported from uid" 拒绝。
+             真正的门是应用内的「诊断日志」开关 —— 默认关闭时本接收器什么都不做；
+             打开后它也只是把已有的本地状态打到 logcat，不写入、不外发。 -->
         <receiver
             android:name=".ProbeReceiver"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="com.draftguard.PROBE" />
             </intent-filter>

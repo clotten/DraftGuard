@@ -72,6 +72,7 @@ public class TypelogService extends AccessibilityService {
     public static volatile long evSourceNull;   // 文本变化事件里 source 为空
     public static volatile long evNotEditable;  // source 不是可编辑控件
     public static volatile long evTraverseHit;  // 靠遍历活动窗口找回输入框的次数
+    public static volatile long evRelaxedHit;   // 节点报告"不可编辑"但被放宽判定接受（微信就靠这个）
     public static volatile long evCaptured;     // 真正取到文本并进入记录流程的次数
     public static volatile long skippedSelf;    // 跳过：本应用自己 / 系统 UI
     public static volatile long skippedIgnored; // 跳过：用户在设置里排除的 App
@@ -99,6 +100,8 @@ public class TypelogService extends AccessibilityService {
     private Handler handler;
     private LogStore store;
     private final Map<String, Pending> pending = new HashMap<>();
+    /** 轮询去重：控件路径 -> 上次读到的文本，避免每 900ms 重复记同一条 */
+    private final Map<String, String> pollLastText = new HashMap<>();
     private final Map<String, String> labelCache = new LinkedHashMap<>();
 
     private static final class Pending {
@@ -206,7 +209,17 @@ public class TypelogService extends AccessibilityService {
             // 安卓 11+ 上 getSource() 返回 null 很常见，这条兜底是"记不到字"的主要修复。
             AccessibilityNodeInfo target = pickEditableEvent(node, pkg);
             if (target == null) {
-                // 三路都拿不到：把当时窗口里有什么记下来，供诊断
+                // 最后一条兜底：节点完全拿不到时（微信就是这样：getSource() 返回 null、
+                // getRootInActiveWindow() 也拿不到），直接用**事件自带的文本**记录。
+                // 微信的每个文本变化事件都携带输入框当前完整文本 —— 事件里就有答案。
+                // 这是"微信打字记不到"的最终解法。
+                String evText = eventText(event);
+                if (evText != null && !evText.isEmpty()) {
+                    evRelaxedHit++;
+                    handleText(pkg, null, evText);
+                    return;
+                }
+                // 确实什么都拿不到：把当时窗口里有什么记下来，供诊断
                 lastScanInfo = scanInfo(pkg);
                 sendStatsThrottled();
                 return;
@@ -233,7 +246,7 @@ public class TypelogService extends AccessibilityService {
      */
     private AccessibilityNodeInfo pickEditableEvent(AccessibilityNodeInfo fromEvent, String pkg) {
         if (fromEvent != null && !LogStore.isSkippedPackage(pkg)
-                && !Prefs.isIgnored(this, pkg) && fromEvent.isEditable()) {
+                && !Prefs.isIgnored(this, pkg) && looksLikeInput(fromEvent)) {
             return fromEvent;
         }
         if (LogStore.isSkippedPackage(pkg) || Prefs.isIgnored(this, pkg)) {
@@ -241,21 +254,91 @@ public class TypelogService extends AccessibilityService {
         }
         try {
             AccessibilityNodeInfo root = getRootInActiveWindow();
-            if (root == null) {
-                return null;
+            if (root != null) {
+                AccessibilityNodeInfo focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+                if (looksLikeInput(focused)) {
+                    return focused;
+                }
+                AccessibilityNodeInfo deep = findEditable(root, 0);
+                if (looksLikeInput(deep)) {
+                    return deep;
+                }
             }
-            AccessibilityNodeInfo focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-            if (focused != null && focused.isEditable() && !focused.isPassword()) {
-                return focused;
+        } catch (Throwable ignored) {
+        }
+        // 活动窗口拿不到时（微信等应用的常见情况：root 为 null、事件节点又不可编辑），
+        // 只要事件节点有文本且不是密码框，就认它是输入框 —— 有文本本身就是强信号。
+        if (fromEvent != null && !fromEvent.isPassword() && textOf(fromEvent) != null) {
+            evRelaxedHit++;
+            return fromEvent;
+        }
+        return null;
+    }
+
+    /**
+     * 是否像"用户正在打字的输入框"。
+     *
+     * 关键坑：**微信的输入框节点 isEditable() 返回 false**（MIUI + 微信对无障碍做了处理），
+     * 只认 isEditable() 会把微信全部漏掉 —— 这正是"微信打字记不到"的真正原因。
+     * 所以这里放宽为三选一：可编辑 / 类名像输入框（EditText、Edit） / 有焦点且有文本。
+     * 密码框始终排除。
+     */
+    private static boolean looksLikeInput(AccessibilityNodeInfo node) {
+        if (node == null) {
+            return false;
+        }
+        try {
+            if (node.isPassword()) {
+                return false;
             }
-            AccessibilityNodeInfo deep = findEditable(root, 0);
-            if (deep != null && !deep.isPassword()) {
-                return deep;
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (node.isEditable()) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            CharSequence cls = node.getClassName();
+            if (cls != null) {
+                String n = cls.toString();
+                if (n.contains("EditText") || n.endsWith("Edit")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            return node.isFocused() && textOf(node) != null;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** 节点当前文本；读不到返回 null（注意：空字符串代表"真的为空"，与 null 不同） */
+    private static String textOf(AccessibilityNodeInfo node) {
+        if (node == null) {
+            return null;
+        }
+        try {
+            CharSequence t = node.getText();
+            if (t != null) {
+                return t.toString();
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            // 有些输入框的文本挂在子节点上
+            CharSequence d = deepText(node, 0);
+            if (d != null) {
+                return d.toString();
             }
         } catch (Throwable ignored) {
         }
         return null;
     }
+
 
     private AccessibilityNodeInfo findEditable(AccessibilityNodeInfo node, int depth) {
         if (node == null || depth > 12) {
@@ -327,6 +410,22 @@ public class TypelogService extends AccessibilityService {
      * 拿到一份文本后的记录流程（事件路径与轮询路径共用）。
      * 这里做去抖：连打时只保留最后一次，350ms 后落盘的是最新那一版，不会丢字。
      */
+    /** 事件自带的文本（微信等应用只给事件、不给节点，全靠它） */
+    private static String eventText(AccessibilityEvent event) {
+        if (event == null) {
+            return null;
+        }
+        try {
+            java.util.List<CharSequence> list = event.getText();
+            if (list != null && !list.isEmpty()) {
+                CharSequence t = list.get(0);
+                return t == null ? null : t.toString();
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
     private void handleText(String pkg, AccessibilityNodeInfo focusedNode, String text) {
         if (LogStore.isSkippedPackage(pkg) || Prefs.isIgnored(this, pkg)) {
             skippedOther++;
@@ -338,15 +437,25 @@ public class TypelogService extends AccessibilityService {
         if (text.isEmpty() && !Prefs.keepEmpty(this)) {
             return;
         }
-        // 只记"正在输入的框"。放在这里而不是更前面，是为了让它统计到的
-        // 全是"确实有文本、但那个框没有焦点"的情况 —— 这正是需要排查的信号。
-        // （参数名曾经和下面的局部变量重名，导致误用了事件节点，已改名避免再踩。）
-        if (Prefs.focusOnly(this) && !isActiveInput(focusedNode)) {
+        // 只记"正在输入的框"。这道闸门放在最前面，是为了同时挡住三条来源：
+        //   · 事件路径：同屏其它可编辑控件、界面重绘时补发的旧内容
+        //   · 轮询路径：每 900ms 重读同一个框（不挡就会把同一段文字重复记很多遍）
+        //   · 遍历兜底：findEditable 找到的第一个可编辑控件，未必是你正在输入的那个
+        // 节点拿不到时（事件文本路径）无法判定焦点，此时放行：
+        // 能收到带文本的文本变化事件，本身就说明用户正在那个框里打字。
+        if (Prefs.focusOnly(this) && focusedNode != null && !isActiveInput(focusedNode)) {
             skippedNoFocus++;
             return;
         }
-        final boolean comp = isComposing(focusedNode, text);
-        final String field = fieldKey(focusedNode, pkg);
+        // 占位提示文字不是用户输入（部分系统把 hint 当作文本回传）。
+        // 注意：数据库里存的是 hint 原文 "搜索记录过的文字"，结尾的省略号是界面显示时才加的，
+        // 所以这里必须按不含省略号的形式比对 —— 之前按含省略号比对，一直没拦住。
+        if (isPlaceholder(text)) {
+            skippedNoise++;
+            return;
+        }
+        final boolean comp = focusedNode != null && isComposing(focusedNode, text);
+        final String field = focusedNode != null ? fieldKey(focusedNode, pkg) : (pkg + "#@event");
 
         // 一个字节都读不到时，宁愿这一版漏掉，也不能把已有内容覆盖成空
         if (text.isEmpty()) {
@@ -401,17 +510,12 @@ public class TypelogService extends AccessibilityService {
                 return;
             }
             if (added <= 0 && text.trim().isEmpty()) {
-            // 占位提示文字不是用户输入（部分系统把 hint 当作文本回传）
-            if (isPlaceholder(text)) {
-                skippedNoise++;
-                return;
+                return;   // 全是空白，不值得占一条记录
             }
             // 新建的输入框里只有一个字符：多半是打了一个字又立刻删掉的碎片，不占记录
             if (Prefs.minChars(this) > 1 && p.chars == 0 && text.trim().length() < 2) {
                 skippedNoise++;
                 return;
-            }
-                return;   // 全是空白，不值得占一条记录
             }
             if (text.length() > CACHE_LIMIT) {
                 // 超大文本（罕见）：不去抖，直接写，免得内存里挂着几十兆
@@ -514,6 +618,20 @@ public class TypelogService extends AccessibilityService {
         if (text == null) {
             return;
         }
+        // 轮询的最后一道去重：这个框的内容和上次轮询时一模一样，就不必再往下走。
+        // （按控件路径判等，不依赖对象身份 —— 详见 fieldKey 的注释）
+        String key = fieldKey(target, pkg);
+        synchronized (LOCK) {
+            String seen = pollLastText.get(key);
+            if (text.equals(seen)) {
+                return;
+            }
+            pollLastText.put(key, text);
+            if (pollLastText.size() > 64) {
+                pollLastText.clear();
+                pollLastText.put(key, text);
+            }
+        }
         lastApp = pkg;
         lastAppLabel = label(pkg);
         handleText(pkg, target, text);
@@ -535,7 +653,13 @@ public class TypelogService extends AccessibilityService {
         }
     }
 
-    /** 常见占位提示语，识别为噪音（不记录） */
+    /**
+     * 常见占位提示语，识别为噪音（不记录）。
+     *
+     * 踩过的坑：数据库里存的是 hint 原文（"搜索记录过的文字"），
+     * 结尾的省略号是界面显示时才加的。曾经按包含省略号的字符串去比对，
+     * 结果一条都没拦住。
+     */
     private static boolean isPlaceholder(String text) {
         if (text == null) {
             return false;
@@ -544,10 +668,14 @@ public class TypelogService extends AccessibilityService {
         if (t.isEmpty()) {
             return false;
         }
-        return t.startsWith("搜索记录过的文字") || t.startsWith("在这里打字")
-                || t.equals("请输入") || t.equals("说点什么") || t.equals("搜索")
-                || t.equals("输入内容") || t.startsWith("搜索…") || t.startsWith("输入…");
+        // 去掉尾部省略号再比，兼容 hint 原文与界面显示两种形态
+        String bare = t.replaceAll("[.…。]+$", "");
+        return bare.startsWith("搜索记录过的文字") || bare.startsWith("在这里打字")
+                || bare.equals("请输入") || bare.equals("说点什么") || bare.equals("搜索")
+                || bare.equals("输入内容") || bare.startsWith("搜索") && bare.length() <= 4
+                || bare.equals("输入…") || bare.equals("请输入内容");
     }
+
     /**
      * 是否只记录"当前有输入焦点"的输入框。
      *
@@ -762,6 +890,14 @@ public class TypelogService extends AccessibilityService {
         }
     }
 
+    /**
+     * 输入框的稳定标识。
+     *
+     * 坑：兜底分支曾经用 System.identityHashCode(node) —— 但每次事件/轮询拿到的
+     * 都是**新的 AccessibilityNodeInfo 对象**，identityHashCode 每次都变，于是
+     * 同一个输入框被当成无数个"不同的框"，按框去重完全失效，同一段文字被重复记录。
+     * 现在改成基于控件树位置的确定性路径，同一个框每次都算出同一个 key。
+     */
     private static String fieldKey(AccessibilityNodeInfo node, String pkg) {
         try {
             CharSequence id = node.getViewIdResourceName();
@@ -770,7 +906,41 @@ public class TypelogService extends AccessibilityService {
             }
         } catch (Throwable ignored) {
         }
-        return pkg + "#@" + Integer.toHexString(System.identityHashCode(node));
+        return pkg + "#@path:" + nodePath(node);
+    }
+
+    /** 从根到该节点的子节点下标路径，例如 0.2.1 —— 与对象身份无关，稳定可复现 */
+    private static String nodePath(AccessibilityNodeInfo node) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            AccessibilityNodeInfo cur = node;
+            int guard = 0;
+            while (cur != null && guard++ < 32) {
+                AccessibilityNodeInfo parent = cur.getParent();
+                if (parent == null) {
+                    break;
+                }
+                int idx = -1;
+                int n = parent.getChildCount();
+                for (int i = 0; i < n; i++) {
+                    AccessibilityNodeInfo c = parent.getChild(i);
+                    if (c == null) {
+                        continue;
+                    }
+                    if (c.equals(cur)) {
+                        idx = i;
+                        break;
+                    }
+                }
+                if (idx < 0) {
+                    break;
+                }
+                sb.insert(0, "." + idx);
+                cur = parent;
+            }
+        } catch (Throwable ignored) {
+        }
+        return sb.length() == 0 ? "root" : sb.substring(1);
     }
 
     String label(String pkg) {
