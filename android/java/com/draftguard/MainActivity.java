@@ -71,6 +71,12 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         root = findViewById(R.id.root);
+        // 打开应用时确保保活服务在跑（用户可能在设置里开过又关了）
+        if (Prefs.keepAlive(this)) {
+            KeepAliveService.start(this);
+        } else {
+            KeepAliveService.stop(this);
+        }
         buildUi();
     }
 
@@ -284,6 +290,7 @@ public class MainActivity extends Activity {
 
     private void showSettings() {
         String[] items = {
+                "后台保活：" + (Prefs.keepAlive(this) ? "开启（通知栏常驻）" : "关闭"),
                 "只记录有焦点的输入框：" + (Prefs.focusOnly(this) ? "开启" : "关闭"),
                 "忽略删除操作：" + (Prefs.ignoreDeletions(this)
                         ? "开启（删字不新建记录）" : "关闭（删除也记录）"),
@@ -301,47 +308,58 @@ public class MainActivity extends Activity {
                 .setItems(items, (d, which) -> {
                     switch (which) {
                         case 0:
+                            boolean kaOn = !Prefs.keepAlive(this);
+                            Prefs.setKeepAlive(this, kaOn);
+                            if (kaOn) {
+                                KeepAliveService.start(this);
+                            } else {
+                                KeepAliveService.stop(this);
+                            }
+                            toast(kaOn ? "已开启保活：通知栏会出现一条常驻通知，进程不易被系统回收"
+                                       : "已关闭保活：内存紧张时系统可能中断记录");
+                            break;
+                        case 1:
                             Prefs.setFocusOnly(this, !Prefs.focusOnly(this));
                             toast(Prefs.focusOnly(this)
                                     ? "只记正在输入的框（推荐）"
                                     : "所有可编辑框都会被记录");
                             break;
-                        case 1:
+                        case 2:
                             Prefs.setIgnoreDeletions(this, !Prefs.ignoreDeletions(this));
                             toast(Prefs.ignoreDeletions(this)
                                     ? "删字不再新建记录（只保留新增文字的那些版本）"
                                     : "删除也会被记录");
                             break;
-                        case 2:
+                        case 3:
                             Prefs.setSkipIme(this, !Prefs.skipIme(this));
                             toast("已" + (Prefs.skipIme(this) ? "排除" : "包含") + "输入法键盘事件");
                             break;
-                        case 3:
+                        case 4:
                             chooseMinChars();
                             break;
-                        case 4:
+                        case 5:
                             chooseRetention();
                             break;
-                        case 5:
+                        case 6:
                             Prefs.setPolling(this, !Prefs.polling(this));
                             toast("轮询兜底已" + (Prefs.polling(this) ? "开启" : "关闭")
                                     + "（下次生效）");
                             break;
-                        case 6:
+                        case 7:
                             Prefs.setDebug(this, !Prefs.debug(this));
                             if (Prefs.debug(this)) {
                                 TypelogService.DIAG.clear();
                             }
                             toast("诊断日志已" + (Prefs.debug(this) ? "开启" : "关闭"));
                             break;
-                        case 7:
+                        case 8:
                             Prefs.setKeepEmpty(this, !Prefs.keepEmpty(this));
                             toast("已" + (Prefs.keepEmpty(this) ? "记录" : "忽略") + "清空事件");
                             break;
-                        case 8:
+                        case 9:
                             chooseIgnored();
                             break;
-                        case 9:
+                        case 10:
                             toast("应用私有目录：/data/data/" + getPackageName() + "/files/logs/");
                             break;
                         default:

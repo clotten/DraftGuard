@@ -124,7 +124,7 @@ public class ProbeReceiver extends BroadcastReceiver {
         for (String line : store.fileInventory(today, 120)) {
             Log.i(TAG, line.replace("\n", " | "));
         }
-        Log.i(TAG, "totalBytes=" + store.totalBytes() + "  rows=" + store.countAll());
+        Log.i(TAG, "totalBytes=" + store.totalBytes() + "  rows=" + store.countAll() + "  written=" + TypelogService.written);
 
         // 最近记录：把 text 也打出来，远程就能核对内容
         Log.i(TAG, "-- last " + LAST_N + " records --");

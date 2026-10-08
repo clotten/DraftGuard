@@ -7,6 +7,10 @@
     <!-- minSdk 26：安卓 8.0 及以上；targetSdk 33：无障碍服务在 14+ 上限制更严，33 最稳 -->
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="33" />
 
+    <!-- 保活前台服务所需。本应用依然没有任何联网权限。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
@@ -39,6 +43,15 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- 保活：常驻通知换取进程不被系统回收。可在应用内关闭。 -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keeps the accessibility-based draft recorder process alive" />
+        </service>
         <!-- 诊断探针：供 ADB 远程排查，用法见 docs/REMOTE-DEBUG.md。
              必须 exported="true"：否则连 ADB/shell（uid 2000）都发不进来，
              会被 BroadcastQueue 以 "is not exported from uid" 拒绝。

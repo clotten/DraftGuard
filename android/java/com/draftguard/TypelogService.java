@@ -130,6 +130,10 @@ public class TypelogService extends AccessibilityService {
         Log.i(TAG, "采集服务已连接，数据目录：" + store.root().getAbsolutePath());
         Prefs.setServiceEnabledAt(this, System.currentTimeMillis());
         startPolling();
+        // 采集一开始就顺手拉起保活，防止进程被系统回收后采集静默中断
+        if (Prefs.keepAlive(this)) {
+            KeepAliveService.start(this);
+        }
         sendStats();
     }
 
@@ -656,9 +660,13 @@ public class TypelogService extends AccessibilityService {
     /**
      * 常见占位提示语，识别为噪音（不记录）。
      *
-     * 踩过的坑：数据库里存的是 hint 原文（"搜索记录过的文字"），
-     * 结尾的省略号是界面显示时才加的。曾经按包含省略号的字符串去比对，
-     * 结果一条都没拦住。
+     * 两层防线：
+     *   1) 系统给的 hint（见 readText）—— 通用，能覆盖任意应用的占位文字，
+     *      DeepSeek 的「发消息」就是靠它拦住的
+     *   2) 本方法的关键词兜底 —— 应付 getHintText() 不可用的机型
+     *
+     * 踩过的坑：库里存的是 hint 原文（"搜索记录过的文字"），结尾的省略号是界面显示时才加的。
+     * 曾经按含省略号的字符串比对，结果一条都没拦住。
      */
     private static boolean isPlaceholder(String text) {
         if (text == null) {
@@ -669,11 +677,22 @@ public class TypelogService extends AccessibilityService {
             return false;
         }
         // 去掉尾部省略号再比，兼容 hint 原文与界面显示两种形态
-        String bare = t.replaceAll("[.…。]+$", "");
-        return bare.startsWith("搜索记录过的文字") || bare.startsWith("在这里打字")
-                || bare.equals("请输入") || bare.equals("说点什么") || bare.equals("搜索")
-                || bare.equals("输入内容") || bare.startsWith("搜索") && bare.length() <= 4
-                || bare.equals("输入…") || bare.equals("请输入内容");
+        String bare = t.replaceAll("[.…。]+$", "").trim();
+        if (bare.isEmpty()) {
+            return false;
+        }
+        if (bare.startsWith("搜索记录过的文字") || bare.startsWith("在这里打字")) {
+            return true;
+        }
+        // 聊天类应用空输入框的提示语（各家叫法不同，覆盖常见几种）
+        if (bare.equals("发消息") || bare.equals("发送消息") || bare.equals("说点什么")
+                || bare.equals("说点什么吧") || bare.equals("聊点什么") || bare.equals("输入消息")
+                || bare.equals("请输入") || bare.equals("请输入内容") || bare.equals("输入内容")
+                || bare.equals("搜索") || bare.equals("输入…")) {
+            return true;
+        }
+        // "搜索"/"输入"开头的短提示；限制长度避免误伤用户真打的句子
+        return (bare.startsWith("搜索") || bare.startsWith("输入")) && bare.length() <= 6;
     }
 
     /**

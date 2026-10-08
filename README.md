@@ -161,6 +161,10 @@ One JSON object per line, one line per version:
   boxes showing nothing but placeholder text. DraftGuard records only the field that actually has
   input focus: the one you're typing into.
 - **Clear all records** in one tap, with the record count shown before you confirm.
+- **Keep-alive** (optional, on by default). A foreground service with a persistent notification
+  keeps the process from being reclaimed under memory pressure — an accessibility service alone
+  is not guaranteed to stay resident. Turn it off in Settings if you would rather not have the
+  notification.
 - Per-app files, minute buckets, full snapshots, IME composition state, deletion filtering,
   placeholder/noise filtering, full-text search, and ZIP export.
 

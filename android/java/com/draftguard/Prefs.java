@@ -21,6 +21,7 @@ final class Prefs {
     private static final String K_SKIP_IME = "skip_ime";
     private static final String K_MIN_CHARS = "min_chars";
     private static final String K_FOCUS_ONLY = "focus_only";
+    private static final String K_KEEP_ALIVE = "keep_alive";
 
     static final int DEFAULT_RETENTION = 30;
 
@@ -128,5 +129,18 @@ final class Prefs {
 
     static void setFocusOnly(Context c, boolean on) {
         sp(c).edit().putBoolean(K_FOCUS_ONLY, on).apply();
+    }
+
+    /**
+     * 后台保活（前台服务 + 常驻通知）。
+     * 默认开启：安卓会按内存压力回收后台进程，进程一没采集就断。
+     * 代价是通知栏常驻一条通知，不想要可以关掉。
+     */
+    static boolean keepAlive(Context c) {
+        return sp(c).getBoolean(K_KEEP_ALIVE, true);
+    }
+
+    static void setKeepAlive(Context c, boolean on) {
+        sp(c).edit().putBoolean(K_KEEP_ALIVE, on).apply();
     }
 }
