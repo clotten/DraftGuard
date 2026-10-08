@@ -134,6 +134,14 @@ public class TypelogService extends AccessibilityService {
         if (Prefs.keepAlive(this)) {
             KeepAliveService.start(this);
         }
+        // 回填历史记录里的应用名：早期版本受包可见性限制只存下了包名，
+        // 补上 <queries> 声明后要把已记录的重新解析一遍，界面上才会显示「抖音」而不是包名
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                backfillLabels();
+            }
+        });
         sendStats();
     }
 
@@ -973,14 +981,33 @@ public class TypelogService extends AccessibilityService {
             }
         }
         String name = pkg;
+        PackageManager pm = getPackageManager();
+        // 优先用 queryIntentActivities：安卓 11+ 的包可见性限制下，
+        // 它比 getApplicationInfo 更容易拿到别的应用的标签
+        // （已配合 Manifest 里的 <queries> 声明）
         try {
-            PackageManager pm = getPackageManager();
-            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            CharSequence l = pm.getApplicationLabel(ai);
-            if (l != null && l.length() > 0) {
-                name = l.toString();
+            android.content.Intent main =
+                    new android.content.Intent(android.content.Intent.ACTION_MAIN);
+            main.addCategory(android.content.Intent.CATEGORY_LAUNCHER);
+            main.setPackage(pkg);
+            java.util.List<android.content.pm.ResolveInfo> ris = pm.queryIntentActivities(main, 0);
+            if (ris != null && !ris.isEmpty()) {
+                CharSequence l = ris.get(0).loadLabel(pm);
+                if (l != null && l.length() > 0) {
+                    name = l.toString();
+                }
             }
         } catch (Throwable ignored) {
+        }
+        if (name.equals(pkg)) {
+            try {
+                ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+                CharSequence l = pm.getApplicationLabel(ai);
+                if (l != null && l.length() > 0) {
+                    name = l.toString();
+                }
+            } catch (Throwable ignored) {
+            }
         }
         synchronized (labelCache) {
             if (labelCache.size() > 200) {
@@ -991,6 +1018,43 @@ public class TypelogService extends AccessibilityService {
         return name;
     }
 
+
+    /**
+     * 回填历史记录里的应用名。
+     *
+     * 为什么要它：早期版本因为包可见性限制拿不到别的应用的名字，索引里存的都是包名。
+     * 补上 <queries> 声明后需要把已记录的那些重新解析一遍，否则界面里永远显示
+     * com.ss.android.ugc.aweme 这种，而不是「抖音」。
+     */
+    private void backfillLabels() {
+        if (store == null) {
+            return;
+        }
+        try {
+            java.text.SimpleDateFormat dayF =
+                    new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            for (int back = 0; back < 3; back++) {
+                String day = dayF.format(cal.getTime());
+                java.util.Set<String> pkgs = new java.util.LinkedHashSet<>();
+                for (LogStore.Row row : store.readDay(day, 0)) {
+                    if (row.app != null && !row.app.isEmpty()) {
+                        pkgs.add(row.app);
+                    }
+                }
+                for (String p : pkgs) {
+                    String lb = label(p);          // 解析成功会进 labelCache
+                    if (lb != null && !lb.equals(p)) {
+                        store.putAppLabel(day, p, lb);
+                    }
+                }
+                cal.add(java.util.Calendar.DAY_OF_MONTH, -1);
+            }
+            Log.i(TAG, "应用名回填完成");
+        } catch (Throwable t) {
+            Log.w(TAG, "应用名回填失败", t);
+        }
+    }
     private void sendStats() {
         try {
             Intent i = new Intent(EXTRA_EVENT);

@@ -11,6 +11,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- 安卓 11+ 的包可见性限制：不声明就查不到别的应用，界面里只能显示包名
+         （com.ss.android.ugc.aweme 而不是「抖音」）。
+         这里只声明"带桌面启动入口的应用"，够用来取中文名，比 QUERY_ALL_PACKAGES 克制得多。 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
