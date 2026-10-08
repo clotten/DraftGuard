@@ -59,6 +59,9 @@ public class MainActivity extends Activity {
     private final SimpleDateFormat DAY = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
     private final SimpleDateFormat HM = new SimpleDateFormat("HH:mm", Locale.US);
 
+    /** 看今天记录时是否显示原始逐条版本（默认合并成整段，见 Burst） */
+    private boolean showRawRows = false;
+
     private final BroadcastReceiver statsReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -159,6 +162,11 @@ public class MainActivity extends Activity {
         root.addView(resultView);
 
         // 导出
+        LinearLayout expRow2 = new LinearLayout(this);
+        expRow2.setOrientation(LinearLayout.HORIZONTAL);
+        expRow2.setPadding(0, dp(10), 0, 0);
+        root.addView(expRow2);
+
         LinearLayout expRow = new LinearLayout(this);
         expRow.setOrientation(LinearLayout.HORIZONTAL);
         expRow.setPadding(0, dp(10), 0, dp(20));
@@ -171,6 +179,14 @@ public class MainActivity extends Activity {
         Button btnExport = button("分享 zip");
         btnExport.setOnClickListener(v -> doExport());
         expRow.addView(btnExport);
+
+        final Button btnToggleView = button(showRawRows ? "看合并视图" : "看逐条版本");
+        btnToggleView.setOnClickListener(v -> {
+            showRawRows = !showRawRows;
+            btnToggleView.setText(showRawRows ? "看合并视图" : "看逐条版本");
+            showToday();
+        });
+        expRow2.addView(btnToggleView);
 
         Button btnOpen = button("看今天全部记录");
         btnOpen.setOnClickListener(v -> showToday());
@@ -630,35 +646,77 @@ public class MainActivity extends Activity {
         return (from > 0 ? "…" : "") + text.substring(from, to) + (to < text.length() ? "…" : "");
     }
 
+    /**
+     * 看今天全部记录。
+     *
+     * 默认用「合并视图」：把逐字版本流合并成一段段完整的话 —— 存储层保留每次变化
+     * （防丢就靠它），但给人看的时候不该显示 你→你好→你好呀 这种增量过程。
+     * 想看原始增量时用下面的「逐条」开关。
+     */
     private void showToday() {
         final String today = DAY.format(new Date());
-        setCard(resultView, "今天全部记录", "读取中…（按分钟分组，新的在前）");
+        setCard(resultView, "今天全部记录", "读取中…");
         new Thread(() -> {
             LogStore store = new LogStore(getFilesDir(), 0);
             List<LogStore.Row> rows = store.readDay(today, 0);
-            final StringBuilder sb = new StringBuilder();
+            Map<String, String> labels = store.labels(today);
+
+            StringBuilder sb = new StringBuilder();
             if (rows.isEmpty()) {
                 sb.append("今天还没有记录。");
-            } else {
-                sb.append("共 ").append(rows.size()).append(" 条，按时间倒序：\n\n");
+            } else if (showRawRows) {
+                sb.append("【逐条视图】共 ").append(rows.size()).append(" 条原始版本（新→旧）\n")
+                  .append("这是每次文本变化都存一版的真相，用于排查；看内容请切回合并视图。\n\n");
                 int shown = 0;
-                for (int i = rows.size() - 1; i >= 0 && shown < 200; i--, shown++) {
+                for (int i = rows.size() - 1; i >= 0 && shown < 300; i--, shown++) {
                     LogStore.Row r = rows.get(i);
-                    String flag = r.comp ? "（未上屏）" : "";
-                    sb.append(r.ts, 11, 19).append("  [").append(r.minute).append("] ")
-                      .append(r.app).append("  ").append(r.chars).append(" 字").append(flag)
-                      .append("\n").append(tail(r.text, 120)).append("\n\n");
+                    sb.append(r.ts, 11, 19).append("  ").append(name(labels, r.app))
+                      .append("  ").append(r.chars).append(" 字")
+                      .append(r.comp ? "（未上屏）" : "").append("\n")
+                      .append(tail(r.text, 160)).append("\n\n");
                 }
                 if (rows.size() > shown) {
-                    sb.append("… 还有 ").append(rows.size() - shown)
-                      .append(" 条，完整内容请点「导出全部记录」\n");
+                    sb.append("… 还有 ").append(rows.size() - shown).append(" 条，完整内容请导出\n");
+                }
+            } else {
+                List<Burst> bursts = Burst.groupNewestFirst(rows);
+                sb.append("【合并视图】共 ").append(bursts.size()).append(" 段完整内容")
+                  .append("（原始 ").append(rows.size()).append(" 个版本已全部存盘）\n")
+                  .append("同一次连续输入只显示最后成型的整段。\n\n");
+                int shown = 0;
+                for (int i = 0; i < bursts.size() && shown < 200; i++, shown++) {
+                    Burst b = bursts.get(i);
+                    sb.append(b.firstTs, 11, 16);
+                    if (!b.firstTs.substring(11, 16).equals(b.lastTs.substring(11, 16))) {
+                        sb.append(" → ").append(b.lastTs, 11, 16);
+                    }
+                    sb.append("  ").append(name(labels, b.app))
+                      .append("　").append(b.text.length()).append(" 字");
+                    if (b.versions > 1) {
+                        sb.append("（由 ").append(b.versions).append(" 个版本合并）");
+                    }
+                    if (b.comp) {
+                        sb.append("（末尾未上屏）");
+                    }
+                    sb.append("\n").append(b.text).append("\n\n");
+                }
+                if (bursts.size() > shown) {
+                    sb.append("… 还有 ").append(bursts.size() - shown).append(" 段，请导出查看\n");
                 }
             }
-            ui.post(() -> setCard(resultView, "今天全部记录", sb.toString().trim()));
+
+            final String text = sb.toString().trim();
+            ui.post(() -> {
+                setCard(resultView, "今天全部记录"
+                        + (showRawRows ? "（逐条视图）" : "（合并视图）"), text);
+            });
         }, "typelog-today").start();
     }
 
-    /** 导出到公共下载目录：文件管理器能看到，也能被 adb 拉取 */
+    private static String name(Map<String, String> labels, String app) {
+        String n = labels == null ? null : labels.get(app);
+        return (n == null || n.isEmpty()) ? app : n;
+    }
     private void doExportToDownloads() {
         toast("正在导出到「下载/DraftGuard」…");
         new Thread(() -> {

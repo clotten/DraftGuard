@@ -59,6 +59,22 @@ public class ProbeReceiver extends BroadcastReceiver {
                     Log.i(TAG, "flush: 记录文件每次写入都是即时 fsync，无需额外刷新");
                     doDumpCounters(context);
                     break;
+                case "bursts": {
+                    // 直接输出「合并视图」的结果，便于远程核对"整段话"是否正确
+                    LogStore st = new LogStore(context.getFilesDir(), 0);
+                    String day = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+                    java.util.List<LogStore.Row> rows = st.readDay(day, 0);
+                    java.util.List<Burst> bs = Burst.groupNewestFirst(rows);
+                    Log.i(TAG, "bursts: 原始 " + rows.size() + " 个版本 -> 合并 "
+                            + bs.size() + " 段");
+                    for (int i = 0; i < bs.size() && i < 40; i++) {
+                        Burst b = bs.get(i);
+                        Log.i(TAG, "  [" + b.firstTs.substring(11, 16) + "] " + b.app
+                                + " versions=" + b.versions + " chars=" + b.text.length()
+                                + " text=<" + oneLine(b.text, 120) + ">");
+                    }
+                    break;
+                }
                 case "export": {
                     LogStore st = new LogStore(context.getFilesDir(), 0);
                     android.net.Uri u = Exporter.toPublicDownloads(context, st.root());
