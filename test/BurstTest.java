@@ -123,11 +123,18 @@ public class BurstTest {
         List<Burst> b8 = Burst.group(rows8);
         check("整段重写分成 2 段", b8.size() == 2, dump(b8));
 
-        System.out.println("\n== 9. 清空后重打（应算同一段）==");
-        List<Burst> b9 = Burst.group(stream(APP, F, "", 5, "写错了", "", "重新写对"));
-        check("清空重打合并为 1 段", b9.size() == 1, dump(b9));
-        check("取重打后的内容", b9.size() == 1 && "重新写对".equals(b9.get(0).text),
-                b9.isEmpty() ? "空" : b9.get(0).text);
+        System.out.println("\n== 9. 清空是消息边界（聊天场景：不能吞消息）==");
+        List<Burst> b9 = Burst.group(stream(APP, F, "", 5,
+                "你好", "", "在吗", "", "哈哈"));
+        check("三条消息分成 3 段", b9.size() == 3, dump(b9));
+        check("三条内容都在", b9.size() == 3
+                        && "你好".equals(b9.get(0).text)
+                        && "在吗".equals(b9.get(1).text)
+                        && "哈哈".equals(b9.get(2).text),
+                dump(b9));
+        List<Burst> b9b = Burst.group(stream(APP, F, "", 5,
+                "今天晚上", "今天晚上吃", "", "走吧"));
+        check("清空后新内容独立成段", b9b.size() == 2, dump(b9b));
 
         System.out.println("\n== 10. 倒序输出（新的在前）==");
         List<LogStore.Row> rows10 = new ArrayList<LogStore.Row>();

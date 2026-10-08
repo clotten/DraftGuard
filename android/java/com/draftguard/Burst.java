@@ -81,14 +81,28 @@ final class Burst {
                 out.add(cur);
             }
         }
-        return out;
+        // 剔除"清空边界"产生的空段：它只是分段标记，没有内容可展示
+        List<Burst> content = new ArrayList<>();
+        for (Burst b : out) {
+            if (!b.text.isEmpty()) {
+                content.add(b);
+            }
+        }
+        return content;
     }
 
     /** 合并后按时间倒序（新的在前），跟列表习惯一致 */
+    /** 合并后按时间倒序，并剔除"清空边界"产生的空段 —— 空段只是分段标记，没有内容可看 */
     static List<Burst> groupNewestFirst(List<LogStore.Row> rows) {
         List<Burst> list = group(rows);
-        Collections.reverse(list);
-        return list;
+        List<Burst> out = new ArrayList<>();
+        for (Burst b : list) {
+            if (!b.text.isEmpty()) {
+                out.add(b);
+            }
+        }
+        Collections.reverse(out);
+        return out;
     }
 
     private static boolean mergeable(Burst cur, Burst next) {
@@ -98,7 +112,24 @@ final class Burst {
         if (msOf(next.firstTs) - msOf(cur.lastTs) > GAP_MS) {
             return false;
         }
-        return !isFullRewrite(cur.text, next.text);
+        String a = cur.text == null ? "" : cur.text;
+        String b = next.text == null ? "" : next.text;
+
+        // 「输入框被清空」是一条消息结束的信号，绝不能跨越它合并。
+        //
+        // 聊天场景的实测问题：打「你好」→发送→打「在吗」→发送→打「哈哈」→发送，
+        // 如果允许跨越清空合并，前两条会被吞掉，只剩「哈哈」。
+        // 清空既可能是"发送后清空"，也可能是"全删重打"，前者必须分段；
+        // 后者若真是同一句话的修正，重新输入时会由于与原文相似而另行判断，
+        // 但**优先保证不吞消息**。
+        if (a.isEmpty() && b.isEmpty()) {
+            return true;    // 连续清空：归并成一个边界标记，避免产生一堆空段
+        }
+        if (a.isEmpty() || b.isEmpty()) {
+            return false;   // 清空是消息边界：空与非空永不合并
+        }
+
+        return !isFullRewrite(a, b);
     }
 
     /**
