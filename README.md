@@ -111,6 +111,12 @@ Override the SDK location if yours differs:
 .\build-apk.ps1 -Sdk "C:\Android\Sdk" -Bt "35.0.0" -Plat "android-36"
 ```
 
+## Data safety
+
+Records live in app-private storage, separate from the APK. **Updating to a newer build signed
+with the same key preserves them**; uninstalling, clearing app data, or changing the signing key
+does not. The in-app "clear all records" action backs up to `Download/DraftGuard/backup/` first.
+
 ## Data format
 
 ```

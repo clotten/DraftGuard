@@ -798,12 +798,15 @@ public class MainActivity extends Activity {
             ui.post(() -> new android.app.AlertDialog.Builder(this)
                     .setTitle("清除全部记录")
                     .setMessage("当前共有 " + total + " 条记录，占用约 " + (bytes / 1024) + " KB。\n\n"
-                            + "清空后无法恢复，确定要删掉吗？")
+                            + "清空前会自动备份到「下载 / DraftGuard / backup」，"
+                            + "随时可以用文件管理器取回。\n\n确定要清空吗？")
                     .setNegativeButton("取消", null)
                     .setPositiveButton("确定清除", (d, w) -> {
-                        toast("正在清除…");
+                        toast("正在备份并清除…");
                         new Thread(() -> {
                             LogStore s2 = new LogStore(getFilesDir(), 0);
+                            // 先备份到公共下载目录，用户可随时取回
+                            Exporter.backupToPublicDownloads(this, s2.root(), "preclear");
                             s2.clearAll();
                             ui.post(() -> {
                                 setCard(resultView, "清除结果",

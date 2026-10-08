@@ -1,4 +1,5 @@
 package com.draftguard;
+import android.util.Log;
 
 
 import java.io.BufferedReader;
@@ -29,6 +30,8 @@ import java.util.regex.Pattern;
  *   3) 按“时-分”打桶，同一个 App 在某一分钟内的所有版本都留在同一文件里，事后按时段还原。
  */
 final class LogStore {
+
+    private static final String TAG = "DraftGuardStore";
 
     static final String PKG_SELF = "com.draftguard";
 
@@ -464,7 +467,82 @@ final class LogStore {
      * 不会真的释放，日志目录会看起来清空了却还占着空间。所以顺序是：
      * 关句柄 → 递归删目录 → 重建空目录 → 清掉内存里的索引缓存与统计。
      */
+    /**
+     * 清空前先把现有记录打包备份到同一目录下的 backup-<时间>.zip。
+     *
+     * 为什么要有它：清空是**不可恢复**操作，而它可能被误触发
+     * （比如调试时用命令行 clear）。备份成本几 KB，但能救回全部历史。
+     */
+    File backupAll() {
+        try {
+            File[] days = root.listFiles();
+            boolean has = false;
+            if (days != null) {
+                for (File d : days) {
+                    if (d.isDirectory() && d.listFiles() != null && d.listFiles().length > 0) {
+                        has = true;
+                        break;
+                    }
+                }
+            }
+            if (!has) {
+                return null;
+            }
+            String name = "backup-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",
+                    java.util.Locale.US).format(new java.util.Date()) + ".zip";
+            File out = new File(root, name);
+            try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                    new java.io.BufferedOutputStream(new java.io.FileOutputStream(out)))) {
+                for (File day : days) {
+                    if (!day.isDirectory()) {
+                        continue;
+                    }
+                    File[] files = day.listFiles();
+                    if (files == null) {
+                        continue;
+                    }
+                    for (File f : files) {
+                        if (!f.isFile()) {
+                            continue;
+                        }
+                        zos.putNextEntry(new java.util.zip.ZipEntry(day.getName() + "/" + f.getName()));
+                        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                            byte[] buf = new byte[8192];
+                            int n;
+                            while ((n = in.read(buf)) > 0) {
+                                zos.write(buf, 0, n);
+                            }
+                        }
+                        zos.closeEntry();
+                    }
+                }
+            }
+            lastBackup = out.getName();
+            Log.i(TAG, "清空前已备份：" + out.getAbsolutePath());
+            return out;
+        } catch (Throwable t) {
+            lastError = "备份失败: " + t;
+            return null;
+        }
+    }
+
+    /** 最近一次备份文件名（供界面显示） */
+    volatile String lastBackup = "";
+    /** 最近一次备份的完整路径（清空前自动生成） */
+    volatile String lastBackupPath = "";
+
     synchronized void clearAll() {
+        // 先把现有记录打包备份，再删。清空不可恢复，而它可能被误触发
+        // （调试时用命令行 clear 就是一次真实误操作）。备份只有几 KB，却能救回全部历史。
+        File backup = backupAll();
+        if (backup != null) {
+            File keep = new File(root.getParentFile(), backup.getName());
+            if (backup.renameTo(keep)) {
+                lastBackupPath = keep.getAbsolutePath();
+            } else {
+                lastBackupPath = backup.getAbsolutePath();
+            }
+        }
         closeAll();
         deleteTree(root);
         //noinspection ResultOfMethodCallIgnored
@@ -479,7 +557,6 @@ final class LogStore {
             lastError = "";
         }
     }
-
     /** 当前盘上有多少条记录（清理前给用户看一眼） */
     int countAll() {
         int n = 0;

@@ -229,3 +229,37 @@ produced rows.
 **Lesson.** When a node-based path fails, dump the *event* before adding more node
 heuristics. All accessibility data that matters may be in the event, and an
 `AccessibilityEvent` needs no window access at all.
+---
+
+## Data safety: when records survive an update, and when they don't
+
+A question worth answering precisely, because the failure mode is silent and total.
+
+| Action | Records |
+|---|---|
+| Install a **newer APK with the same signature** (`adb install -r` or tapping the APK) | **Preserved** — this is the normal update path |
+| Change the signing key between builds | **Lost** — Android sees a different app; the install fails or requires uninstalling first |
+| Uninstall the app | **Lost** |
+| Settings → Clear data | **Lost** |
+| Settings → Clear all records (in-app) | **Backed up first**, then cleared |
+| Device factory reset | **Lost** |
+
+**What this means in practice:** as long as builds are signed with the same keystore, updating the
+app never touches the records — they live in app-private storage and are not part of the APK.
+So **the keystore is as important as the data**: lose it and you can no longer ship an update that
+installs over the existing app, which forces a fresh install and takes the records with it.
+
+### Protections added after a real incident
+
+During development, records were wiped by issuing the diagnostic probe's `clear` command while
+testing. Three protections now exist:
+
+1. **The probe's `clear` requires an explicit confirmation**:
+   `--es cmd clear --ez confirm true`. Without it, the command is refused and logged as such.
+2. **Any clear backs up first**, to `Download/DraftGuard/backup/backup-<time>-preclear.zip`.
+   Deliberately in the **public** Downloads folder — a backup inside app-private storage cannot be
+   retrieved by the user (or by `adb`), which makes it worthless as a backup.
+3. The in-app confirmation dialog states that a backup will be made and where it goes.
+
+**Lesson:** any irreversible operation needs both a confirmation gate and a recoverable artifact.
+"Clearing is easy to test with" is exactly how user data gets destroyed.

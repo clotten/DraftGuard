@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
@@ -50,6 +51,13 @@ public class ProbeReceiver extends BroadcastReceiver {
         try {
             switch (cmd) {
                 case "clear":
+                    // 需要显式确认，避免误触发（历史上就用命令行 clear 清掉过用户数据）
+                    if (!intent.getBooleanExtra("confirm", false)) {
+                        Log.w(TAG, "clear 被拒绝：缺少确认参数。"
+                                + "如确需清空，请加 --ez confirm true；"
+                                + "记录会先自动备份到 files/backup-*.zip");
+                        break;
+                    }
                     doClear(context);
                     break;
                 case "reset":
@@ -210,8 +218,13 @@ public class ProbeReceiver extends BroadcastReceiver {
     private void doClear(Context context) {
         LogStore store = new LogStore(context.getFilesDir(), 0);
         int before = store.countAll();
+        // 清空前备份到**公共下载目录**（用户可取回；私有目录里的备份等于没有）
+        android.net.Uri bak = Exporter.backupToPublicDownloads(context, store.root(), "preclear");
         store.clearAll();
         Log.i(TAG, "cleared: 已删除 " + before + " 条记录，剩余 " + store.countAll() + " 条");
+        Log.i(TAG, "清空前备份：" + (bak == null
+                ? "未生成（可能无数据）"
+                : "Download/" + Exporter.PUBLIC_SUBDIR + "/backup/"));
     }
 
     private void doReset() {

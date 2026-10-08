@@ -120,6 +120,45 @@ final class Exporter {
         }
     }
 
+    /**
+     * 清空前把现有记录备份到**公共下载目录**（Download/DraftGuard/backup/）。
+     *
+     * 为什么不能放应用私有目录：那里用户取不出来（adb 也拉不到），
+     * 备份取不出来就等于没有备份。放公共目录才真正可恢复。
+     */
+    static Uri backupToPublicDownloads(Context ctx, File logsRoot, String tag) {
+        String name = "backup-" + stamp() + (tag == null || tag.isEmpty() ? "" : "-" + tag) + ".zip";
+        try {
+            ContentResolver cr = ctx.getContentResolver();
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+            cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/zip");
+            cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                    Environment.DIRECTORY_DOWNLOADS + "/" + PUBLIC_SUBDIR + "/backup");
+            if (Build.VERSION.SDK_INT >= 29) {
+                cv.put(MediaStore.MediaColumns.IS_PENDING, 1);
+            }
+            Uri uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (uri == null) {
+                return null;
+            }
+            OutputStream os = cr.openOutputStream(uri);
+            if (os == null) {
+                return null;
+            }
+            int entries = writeZip(logsRoot, os);
+            if (Build.VERSION.SDK_INT >= 29) {
+                ContentValues done = new ContentValues();
+                done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                cr.update(uri, done, null, null);
+            }
+            Log.i(TAG, "备份到公共目录成功：" + name + "，条目 " + entries);
+            return uri;
+        } catch (Throwable t) {
+            Log.e(TAG, "备份失败", t);
+            return null;
+        }
+    }
     /** 导出到应用 cache（供分享面板使用），返回文件；失败返回 null */
     static File toCache(Context ctx, File logsRoot) {
         String name = "typelog-export-" + stamp() + ".zip";
