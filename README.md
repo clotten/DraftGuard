@@ -1,6 +1,6 @@
 # DraftGuard
 
-[![build](https://github.com/clotten/DraftGuard/actions/workflows/build.yml/badge.svg)](https://github.com/clotten/DraftGuard/actions/workflows/build.yml)
+[![test](https://github.com/clotten/DraftGuard/actions/workflows/test.yml/badge.svg)](https://github.com/clotten/DraftGuard/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![minSdk](https://img.shields.io/badge/minSdk-26-green.svg)](#requirements)
 
@@ -92,6 +92,10 @@ newlines and quotes, search hits and misses, result-count limits, the name index
 bucketing, and a regression case for a search bug that silently skipped entire files.
 
 ## Build
+
+> This repository ships **source only** — no prebuilt APKs are committed or attached to releases.
+> Build locally with the script below (no Gradle, no network).
+
 
 No Gradle, no network, no AndroidX — just the SDK's own tools:
 

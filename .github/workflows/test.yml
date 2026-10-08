@@ -1,0 +1,81 @@
+name: test
+
+# 只做代码质量保障，不产出、不发布任何安装包。
+# 每次 push / PR 自动编译源码并跑存储层测试；失败即变红。
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Storage tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34'
+
+      # 存储层测试跑在普通 JVM 上：不需要设备、不需要模拟器。
+      # 这是本项目能在 CI 里一分钟跑完的关键（见 docs/TROUBLESHOOTING.md）。
+      - name: Run storage tests
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          AJ="$SDK/platforms/android-34/android.jar"
+          BT=$(ls -d "$SDK"/build-tools/*/ | sort -V | tail -1)
+          echo "android.jar: $AJ"
+          echo "build-tools: $BT"
+
+          mkdir -p build/test
+          javac -encoding UTF-8 -source 8 -target 8 \
+            -bootclasspath "$AJ:${BT}core-lambda-stubs.jar" \
+            -classpath "$AJ" -nowarn -d build/test \
+            android/java/com/draftguard/LogStore.java \
+            android/java/com/draftguard/Record.java \
+            android/java/com/draftguard/Json.java \
+            test/StoreTest.java
+
+          java -cp "build/test:$AJ" com.draftguard.StoreTest
+        # 有任何一项 FAIL 就返回非零，CI 直接红
+
+      # 全量源码编译检查：确保整个 App 没有编译错误，
+      # 但不打包、不签名、不上传任何产物。
+      - name: Compile all sources
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          AJ="$SDK/platforms/android-34/android.jar"
+          BT=$(ls -d "$SDK"/build-tools/*/ | sort -V | tail -1)
+
+          mkdir -p build/apk/{res,gen,classes}
+          "$BT/aapt2" compile --dir android/res -o build/apk/res.zip
+          "$BT/aapt2" link \
+            -o build/apk/base.apk -I "$AJ" \
+            --manifest android/AndroidManifest.xml \
+            --java build/apk/gen \
+            --min-sdk-version 26 --target-sdk-version 33 \
+            --auto-add-overlay build/apk/res.zip
+
+          find android/java build/apk/gen -name '*.java' > build/apk/sources.txt
+          javac -encoding UTF-8 -source 8 -target 8 \
+            -bootclasspath "$AJ:${BT}core-lambda-stubs.jar" \
+            -classpath "$AJ" -nowarn \
+            -d build/apk/classes @build/apk/sources.txt
+          echo "源码与资源全部通过编译"
