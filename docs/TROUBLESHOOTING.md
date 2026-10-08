@@ -263,3 +263,33 @@ testing. Three protections now exist:
 
 **Lesson:** any irreversible operation needs both a confirmation gate and a recoverable artifact.
 "Clearing is easy to test with" is exactly how user data gets destroyed.
+---
+
+## 8. Why some submit buttons cannot be detected
+
+Message segmentation relies on a real signal: *the user tapped a submit button*. That works for
+WeChat, QQ, Douyin and Larus, because their buttons are ordinary views that emit
+`TYPE_VIEW_CLICKED` with a readable label.
+
+It does **not** work everywhere. Observed case: tapping Bilibili's 发布 (publish) button produced
+**no click event at all** — not merely an unlabelled one. The likely reason is that the screen is
+built with Jetpack Compose, where a Button is a single canvas node and taps are handled internally
+rather than surfaced as per-button accessibility click events. (Switching to another activity also
+tore down the view tree, so timing may contribute.)
+
+**Consequence:** for such apps there is no submit signal, and segmentation falls back to text
+shape (common-prefix). That is usually right, but it cannot distinguish "continue typing the same
+sentence" from "submit, then type a similar new one" — the two are identical in text.
+
+**What would fix it properly**, in increasing order of intrusiveness:
+
+1. Listen for `TYPE_VIEW_KEY` / IME action events (`IME_ACTION_SEARCH` etc.) — needs
+   `flagRequestFilterKeyEvents` and, on modern Android, a restricted permission.
+2. Observe the input field losing focus (`TYPE_VIEW_FOCUSED` transitions) — submit usually moves
+   focus away. Cheap to try, not yet attempted.
+3. Detect the *effect* of submission: the message list grows, or the edit field resets. Requires
+   window-content monitoring, which is noisy.
+
+**Practical stance:** the fallback is good enough for reading and recovering drafts, which is the
+app's purpose. Perfect message-level segmentation on every UI toolkit is a much larger problem
+than draft preservation, and should not be traded against it.

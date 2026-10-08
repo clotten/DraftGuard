@@ -178,7 +178,7 @@ public class ProbeReceiver extends BroadcastReceiver {
             if (diagEv.isEmpty()) {
                 Log.i(TAG, "  (空：诊断日志未开启，或重启后还没收到事件)");
             }
-            int s0 = Math.max(0, diagEv.size() - 60);
+            int s0 = Math.max(0, diagEv.size() - 120);
             for (int i = s0; i < diagEv.size(); i++) {
                 Log.i(TAG, "  ev: " + diagEv.get(i));
             }
