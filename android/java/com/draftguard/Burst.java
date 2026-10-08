@@ -12,27 +12,44 @@ import java.util.List;
  * 原始数据必须保留 —— 崩在"你好呀"那一步，能捞回来的就是当时那一版。
  * 但**看的时候**不该显示这个增量过程，人想看的是"我最后打出来的整段话"。
  *
- * 合并规则（连续两条满足才算同一段）：
- *   · 同一个应用、同一个输入框
- *   · 时间间隔不超过 GAP_MS（默认 5 分钟）
- *   · 后一版是前一版的延伸：以前一版为前缀，或反之（允许中间插字的少量回退）
+ * 判据为何不能用"前缀延伸"
+ * ------------------------
+ * 打字过程本身就是"上一版是下一版的前缀"，所以 startsWith 判不出
+ * "在中间补字、替换某个字"这类修改。实测反例：
+ *      "你好呀我很".startsWith("你好呀我") == true
+ * （"很"插在"我"之后，新串依然以旧串开头）。
  *
- * 合并后只保留最后那一版（即这段的最终形态），并记下这段包含多少个版本。
+ * 所以改用**偏离幅度**：
+ *   · 共同开头之后的长度差很小  → 同一次输入的修修补补：合并，只留最后成型
+ *   · 偏离很大（整段重写）      → 另一段话：开新段
+ * 再用"间隔不超过 GAP_MS"兜住时间维度。
  */
 final class Burst {
 
-    /** 超过这个间隔就算"另一段"，不会跟上一段合并 */
+    /** 超过这个间隔就算"另一段" */
     static final long GAP_MS = 5 * 60 * 1000L;
+
+    /**
+     * 共同开头占较短那一版的比例低于它，就认为是"换了一段话"。
+     * 用比例而不是绝对长度差：<一二三四五六七八九十> → <完全不同的另一句话来了>
+     * 长度只差 1，但共同开头只有 1 个字，明显是重写。
+     */
+    private static final double KEEP_RATIO = 0.5;
+    /** 太短的文本（如"嗯""好"）不做重写判定，避免误拆 */
+    private static final int MIN_LEN_FOR_REWRITE = 4;
 
     String app = "";
     String field = "";
+    /** 该段最后成型的文本 */
     String text = "";
     String firstTs = "";
     String lastTs = "";
     String minute = "";
+    /** 该段一共包含多少个原始版本 */
     int versions = 1;
-
-    /** 这一段的最终形态是否有未上屏（拼音）状态 */
+    /** 其中多少次属于"从中间改动"（错别字修正等），供界面说明 */
+    int edits = 0;
+    /** 该段最终形态是否处于输入法未上屏状态 */
     boolean comp;
 
     static List<Burst> group(List<LogStore.Row> rows) {
@@ -40,7 +57,6 @@ final class Burst {
         for (LogStore.Row r : rows) {
             raw.add(fromRow(r));
         }
-        // 按时间正序处理（输入是顺序就是这个顺序，但保险起见排一次）
         Collections.sort(raw, new Comparator<Burst>() {
             @Override
             public int compare(Burst a, Burst b) {
@@ -51,7 +67,10 @@ final class Burst {
         List<Burst> out = new ArrayList<>();
         Burst cur = null;
         for (Burst b : raw) {
-            if (cur != null && sameBurst(cur, b)) {
+            if (cur != null && mergeable(cur, b)) {
+                if (isMidEdit(cur.text, b.text)) {
+                    cur.edits++;       // 从中间改动，记下来（界面可说明"含 N 次修改"）
+                }
                 cur.text = b.text;
                 cur.lastTs = b.lastTs;
                 cur.minute = b.minute;
@@ -65,27 +84,92 @@ final class Burst {
         return out;
     }
 
-    /** 合并后按时间倒序（新的在前），跟原来列表的习惯一致 */
+    /** 合并后按时间倒序（新的在前），跟列表习惯一致 */
     static List<Burst> groupNewestFirst(List<LogStore.Row> rows) {
         List<Burst> list = group(rows);
         Collections.reverse(list);
         return list;
     }
 
-    private static boolean sameBurst(Burst cur, Burst next) {
+    private static boolean mergeable(Burst cur, Burst next) {
         if (!cur.app.equals(next.app) || !cur.field.equals(next.field)) {
             return false;
         }
         if (msOf(next.firstTs) - msOf(cur.lastTs) > GAP_MS) {
             return false;
         }
-        String a = cur.text == null ? "" : cur.text;
-        String b = next.text == null ? "" : next.text;
-        if (a.isEmpty() && b.isEmpty()) {
-            return true;
+        return !isFullRewrite(cur.text, next.text);
+    }
+
+    /**
+     * 是否"整段重写"（应视为另一段话）。
+     *
+     * 从共同开头处起算两边剩下的内容，如果长度差超过 REWRITE_DELTA、
+     * 且偏离部分相对整段不算短，就认为是重写。借此区分：
+     *   <你好呀我> → <你好呀我很>        长度差 1        → 同一段
+     *   <今天天气不错> → <今天天气很好>    长度差 0        → 同一段
+     *   <第一句话> → <完全不同的另一段内容> 偏离大、比例高  → 两段
+     */
+    static boolean isFullRewrite(String a, String b) {
+        if (a == null || b == null) {
+            return false;
         }
-        // 后一版是前一版的延伸，或反之（允许回退：删了又打属于同一段写作过程）
-        return b.startsWith(a) || a.startsWith(b);
+        if (a.isEmpty() || b.isEmpty()) {
+            return false;   // 清空或从空开始，都属于同一段写作过程
+        }
+        int shorter = Math.min(a.length(), b.length());
+        if (shorter < MIN_LEN_FOR_REWRITE) {
+            return false;   // 太短，不判重写
+        }
+        int cp = commonPrefix(a, b);
+        return (double) cp / shorter < KEEP_RATIO;
+    }
+    /**
+     * 这一版是否属于"从中间改动"。
+     *
+     * 判据：共同开头之后，**旧文本还有剩余** —— 说明不是单纯在末尾接着打。
+     * 注意不能用 startsWith 判断（见类注释里的实测反例）。
+     */
+    /**
+     * 这一版是否属于"真正的修正" —— 也就是界面上值得提示"含 N 次修改"的那种。
+     *
+     * 定义：既不是纯追加、也不是纯退格的改动。
+     *   · 纯追加：旧文本是新文本的前缀（往后接着打）        → 不算
+     *   · 纯退格：新文本是旧文本的前缀（按删除键）          → 不算
+     *   · 其余（等长替换、中间插字、改完再接）              → 算
+     */
+    /**
+     * 这一版是否属于"能判定的修正"（等长替换、或长度缩减后又改写）。
+     *
+     * 能力边界（重要）：**仅凭文本无法区分"末尾追加"和"在末字前插入"** ——
+     *   你好呀我 → 你好呀我饿   （追加"饿"）
+     *   你好呀我 → 你好呀我很   （在"我"前插入"很"）
+     * 两者产生的新串都以旧串开头，形态完全一致。要区分必须知道光标位置，
+     * 而无障碍事件通常不提供。所以这里只判定能确定的情况：
+     *   · 等长但内容不同        → 替换，算修正
+     *   · 新串比旧串短          → 删除，算修正
+     *   · 其余（变长）          → 视为继续书写，不算修正
+     * 这会让"修正次数"偏保守（少报），但不会把正常书写误报成修改。
+     */
+    static boolean isMidEdit(String a, String b) {
+        if (a == null || b == null || a.isEmpty() || b.isEmpty() || a.equals(b)) {
+            return false;
+        }
+        if (b.length() < a.length()) {
+            return true;    // 删掉了一些字
+        }
+        if (b.length() == a.length()) {
+            return true;    // 等长替换
+        }
+        return false;       // 变长：追加或插字，无法判定，按"继续书写"处理
+    }
+    static int commonPrefix(String a, String b) {
+        int n = Math.min(a.length(), b.length());
+        int i = 0;
+        while (i < n && a.charAt(i) == b.charAt(i)) {
+            i++;
+        }
+        return i;
     }
 
     private static Burst fromRow(LogStore.Row r) {
@@ -100,7 +184,7 @@ final class Burst {
         return b;
     }
 
-    /** "2026-10-08T23:04:01.234" -> 毫秒；拿不到就返回 0 */
+    /** "2026-10-08T23:04:01.234" -> 毫秒；拿不到返回 0 */
     static long msOf(String iso) {
         if (iso == null || iso.length() < 23) {
             return 0L;
