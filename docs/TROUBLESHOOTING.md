@@ -381,3 +381,32 @@ shows stale data.
 **Lesson:** a scroll position is a promise to the user. Anything that changes the height of
 content *above* that position breaks it. When a list re-renders in place, gate updates on
 visibility, or the UI will appear to move on its own.
+---
+
+## 11. Diagnostics are the eyes — do not let a refactor eat them
+
+While restructuring the records page, the diagnostic content moved from the page into a dialog.
+Six sections were silently left behind: per-app event counts, the WeChat check, last-scan info,
+the on-disk file inventory, **the last 25 raw accessibility events**, and the focus-filter warning.
+
+The user caught it and said the important part out loud: *"don't delete functionality — then you
+can't diagnose either."* The last-25-raw-events list is precisely the tool that has solved most of
+the hard bugs in this project (WeChat never firing `getSource()`, the field key being unstable,
+the send signal being absent). Losing it would have cost far more than the refactor saved.
+
+**Rule:** when replacing an implementation, migrate it **section by section against the old code**,
+not from memory. Then verify.
+
+**Guard:** `tools/check_diag_fields.py` scans every diagnostic field in `TypelogService` and
+`LogStore` and fails if it is not visible in the diagnostic panel (directly, or through the
+`diagXxx` static mirror used for the store's live counters). It runs in CI, so a future refactor
+cannot quietly drop one.
+
+```
+可诊断字段共 41 个（TypelogService 26 / LogStore 15）
+✅ 全部字段都能在「诊断」面板里看到
+```
+
+**Why the mirror exists:** the real writer is the `LogStore` instance held by the capture service,
+while the diagnostic panel builds its own instance — reading instance counters across objects gives
+zeros and looks like a broken storage layer. So writes also update a static `diagXxx` snapshot.

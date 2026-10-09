@@ -79,3 +79,9 @@ jobs:
             -classpath "$AJ" -nowarn \
             -d build/apk/classes @build/apk/sources.txt
           echo "源码与资源全部通过编译"
+      # 防止"重构时把诊断字段弄丢"：
+      # 诊断面板是排查问题的唯一入口，少一个字段就等于瞎一半。
+      # 扫描 TypelogService / LogStore 里所有可诊断字段，要求都能在
+      # MainActivity 的诊断面板看到（或其 diagXxx 静态镜像），否则失败。
+      - name: Guard diagnostic fields
+        run: python3 tools/check_diag_fields.py

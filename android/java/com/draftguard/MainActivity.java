@@ -979,7 +979,30 @@ public class MainActivity extends Activity {
             sb.append("跳过(设置里排除的)：").append(TypelogService.skippedIgnored).append("\n");
             sb.append("跳过密码框：").append(TypelogService.skippedPassword).append("\n");
             sb.append("写入失败：").append(TypelogService.errors).append("\n");
-            sb.append("本次会话落盘：").append(TypelogService.written).append(" 条\n\n");
+            sb.append("本次会话落盘：").append(TypelogService.written).append(" 条\n");
+            sb.append("跳过(其它原因)：").append(TypelogService.skippedOther).append("\n");
+            sb.append("宽松判据兜底命中：").append(TypelogService.evRelaxedHit).append("\n");
+            sb.append("最近一次错误的来源包：")
+              .append(TextUtils.isEmpty(TypelogService.lastSourcePkg)
+                      ? "（无）" : TypelogService.lastSourcePkg).append("\n");
+            sb.append("最近一次错误：")
+              .append(TextUtils.isEmpty(TypelogService.lastError)
+                      ? "（无）" : TypelogService.lastError).append("\n");
+            sb.append("存储层：写入成功 ").append(LogStore.diagWrittenRows)
+              .append(" 行，累计 ").append(LogStore.diagByteCount).append(" 字节")
+              .append("，跳过 ").append(LogStore.diagSkippedRows).append(" 行\n");
+            sb.append("存储层最近一次写入：")
+              .append(LogStore.diagLastWriteAt == 0 ? "（本次进程还没写过）"
+                      : new java.util.Date(LogStore.diagLastWriteAt).toString()).append("\n");
+            sb.append("存储层最近写入的行（前 120 字）：")
+              .append(TextUtils.isEmpty(LogStore.diagLastLine)
+                      ? "（无）" : tail(LogStore.diagLastLine, 120)).append("\n");
+            sb.append("存储层最近一次错误：")
+              .append(TextUtils.isEmpty(LogStore.diagLastError)
+                      ? "（无）" : LogStore.diagLastError).append("\n");
+            sb.append("最近一次清空前的备份：")
+              .append(TextUtils.isEmpty(LogStore.diagLastBackupPath)
+                      ? "（本次进程还没清空过）" : LogStore.diagLastBackupPath).append("\n\n");
 
             sb.append("── 哪些应用发过事件（次数）──\n");
             java.util.List<Map.Entry<String, Integer>> es =

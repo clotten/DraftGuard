@@ -58,6 +58,21 @@ final class LogStore {
     private final long retentionDays;
 
     // ---- 自证用：把最近一次真实写入的内容与统计留在内存里，界面直接显示 ----
+    /**
+     * 诊断镜像（静态）。
+     *
+     * 为什么需要：真正在写入的是**采集服务**持有的那个 LogStore 实例，
+     * 而界面（诊断面板）会另建一个实例去读 —— 读不到对方的实例字段，
+     * 全是 0 或空，看起来像"存储层坏了"。所以写入时同步一份静态快照。
+     */
+    static volatile String diagLastLine = "";
+    static volatile long diagWrittenRows;
+    static volatile long diagByteCount;
+    static volatile long diagLastWriteAt;
+    static volatile long diagSkippedRows;
+    static volatile String diagLastError = "";
+    static volatile String diagLastBackupPath = "";
+
     volatile String lastLine = "";
     volatile long lastWriteAt;
     volatile long writtenRows;
@@ -123,6 +138,11 @@ final class LogStore {
         lastLine = line;
         lastWriteAt = System.currentTimeMillis();
         writtenRows++;
+        // 同步静态诊断镜像：界面在另一个 LogStore 实例上看不到这些计数
+        diagByteCount = byteCount;
+        diagLastLine = lastLine;
+        diagLastWriteAt = lastWriteAt;
+        diagWrittenRows = writtenRows;
 
         if (!existsBefore && r.appLabel != null && !r.appLabel.isEmpty()) {
             indexPut(r.day, r.app, r.appLabel);
@@ -201,6 +221,7 @@ final class LogStore {
             raf.getFD().sync();
         } catch (Throwable t) {
             lastError = "index 写入失败: " + t;
+            diagLastError = lastError;
         }
     }
 
@@ -635,6 +656,7 @@ final class LogStore {
             } else {
                 lastBackupPath = backup.getAbsolutePath();
             }
+            diagLastBackupPath = lastBackupPath;
         }
         closeAll();
         deleteTree(root);
