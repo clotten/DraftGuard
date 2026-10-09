@@ -1,4 +1,118 @@
-# DraftGuard · 项目状态
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""update_docs.py —— 把本轮经验补进 RETRO.md，并重写 PROJECT_STATE.md。"""
+from pathlib import Path
+
+ROOT = Path(r"E:\desktop\酒馆\tools\ziJi")
+
+RETRO_ADD = """
+
+---
+
+## 十三、第三轮：最危险的一类 bug 是"假正常"
+
+这一轮的反馈全部来自用户实际使用，而且呈现出同一个模式：
+**界面显示一切正常，实际已经在丢数据。**
+
+| 用户原话 | 实际情况 |
+|---|---|
+| "系统的无障碍总开关是关的，但最上面显示采集状态是开启的" | `isServiceEnabled()` 只看"是否在启用列表里"，MIUI 停用后条目仍在 → 永远显示"正在记录" |
+| "我现在开启无障碍了还是会说记录停了" | 服务确实没连上，但提示让人去找一个**该机型根本不存在**的总开关 |
+| "新装的话无法保持无障碍状态吗" | 实测：安装不影响；**`am force-stop` 才会清掉** |
+
+### 1. "假正常"比"报错"危险得多
+
+报错会让人去查；"显示正常"会让人继续用，直到需要找回内容时才发现什么都没有。
+这一轮的三次反馈全是这一类。
+
+> 教训：**凡是"我在正常工作"的界面声明，都必须能被证伪。**
+> 本项目的做法是把判断依据也显示出来（诊断里的"状态探测依据"一行），
+> 而不是只给一个结论。
+
+### 2. 一个"保险起见"的动作，反复破坏用户数据
+
+为了"确保新代码生效"，我每次都执行 `adb shell am force-stop`。
+实测它的副作用：
+
+```
+accessibility_enabled    1 → 0
+enabled_accessibility_services   有 → 被删除
+Bound services           已绑定 → {}
+```
+
+而 `install -r` **本身就会重启进程加载新代码**，force-stop 毫无必要。
+于是"每次装新版用户都要重新开无障碍"这个反复出现的现象，
+根因是我的调试习惯，而用户和应用背了这个锅。
+
+> 教训：**给调试动作列"副作用清单"，并定期质疑它是否仍然必要。**
+> 一个习惯性附加动作，会在几十次迭代里持续造成损失，而且没人会怀疑它。
+
+### 3. 给用户的指引必须在这台设备上真实存在
+
+我根据 `accessibility_enabled=0` 判断"总开关关着"，
+让用户"到无障碍页打开最上面那个总开关"——而该 MIUI 版本的**无障碍页根本没有总开关**
+（那个值只是"有服务被启用"的结果标志，不是可操作的控件）。
+用户回复："我的手机没有总开关呀"。
+
+> 教训：**写给用户的每一步，都要能在他手上的设备上指出具体位置。**
+> 依赖一个"应该存在"的系统控件之前，先确认它存在。
+
+### 4. 被误报的失败（CI）
+
+CI 连续失败，显示 `Storage tests failed`，但真正原因是：
+`tools/check_diag_fields.py` 里写死了 Windows 路径 `E:\\desktop\\...`，
+在 Linux runner 上直接报错退出。**与存储测试毫无关系。**
+
+> 教训：失败信息里的"哪个步骤"不一定等于"哪里错了"。
+> 排查被误报的失败，先看**日志原文**，而不是步骤名。
+> 同类问题这一晚出现了四次（aapt2 静默忽略参数、install 静默失败、
+> 服务跑旧 dex、这个 CI 误报），共同点都是"报告与实际不一致"。
+
+### 5. 补丁脚本的自我伤害
+
+用脚本按花括号配对替换方法时，我几次把**字段声明**一起塞进替换块，
+造成重复定义、反复返工（`已在类中定义了变量 SVC_*`）。
+还出现过"删除步骤把自己刚插入的新方法删掉"（删除找的是第一处匹配）。
+
+> 教训：**工具脚本的替换粒度要匹配职责**——
+> 替换方法就只替换方法体，字段单独加；删除要指定出现位置，不能默认第一处。
+> 这些都写进了 `tools/patch_java.py` 的用法约定。
+
+### 6. 诊断能力是"眼睛"，不能顺手删
+
+重构记录页时把诊断内容搬进弹窗，漏掉了六段，其中
+**"最近 25 条原始事件"是解决本项目大多数硬 bug 的工具**。
+用户直接指出："你不要删除功能呀这样你之后也不好诊断了呢！"
+
+现在有 `tools/check_diag_fields.py`：扫描两个类里全部 41 个可诊断字段，
+要求都能在诊断面板看到，缺失即失败，并已接入 CI。
+
+> 教训：重构时"删除旧实现"必须**逐段对照旧代码迁移**，不能凭记忆写。
+
+---
+
+## 十四、这一轮的数字
+
+| | |
+|---|---|
+| 提交 | 51 个 |
+| 版本 | 2.27.1（三个页面：记录 / 应用 / 工具） |
+| 离线测试 | 69 项（Burst 47 + 存储 22） |
+| 诊断字段 | 41 个，全部可见且有 CI 守护 |
+| 修掉的 bug | 本轮 12 个，其中 3 个属于"假正常" |
+
+**三天下来的总规律：**
+
+1. 第一轮 —— 我**理解错**了（对 API 行为的假设不成立）
+2. 第二轮 —— 工具**静默失效**（改了没生效、装了没生效、参数被忽略）
+3. 第三轮 —— 界面**假正常**（显示在工作，实际在丢数据）
+
+这三类的共同解法只有一条：**让系统自己说出真相**——
+原始事件日志、状态探测依据、产物版本断言、离线可复现的分析脚本。
+凡是"我以为"的地方，都要有一个能把它证伪的观测点。
+"""
+
+PROJECT_STATE = """# DraftGuard · 项目状态
 
 > 最后更新：本轮开发结束时　当前版本：**v2.27.1（versionCode 22701）**
 > 仓库：https://github.com/clotten/DraftGuard
@@ -107,7 +221,7 @@
 
 | 项 | 值 |
 |---|---|
-| Android SDK | `D:\android-sdk_r24.4.1-windows\android-sdk-windows` |
+| Android SDK | `D:\\android-sdk_r24.4.1-windows\\android-sdk-windows` |
 | build-tools | `36.1.0`（注意：该版本 aapt2 **静默忽略** `--version-code/--version-name`） |
 | 平台包 | `android-36` |
 | JDK | 17 |
@@ -125,8 +239,8 @@ powershell -ExecutionPolicy Bypass -File build-apk.ps1 -OutName 'DraftGuard-2.27
 ### 跑测试（不需要设备）
 
 ```powershell
-$aj='<sdk>\platforms\android-36\android.jar'
-$lib='<sdk>\build-tools\36.1.0\core-lambda-stubs.jar'
+$aj='<sdk>\\platforms\\android-36\\android.jar'
+$lib='<sdk>\\build-tools\\36.1.0\\core-lambda-stubs.jar'
 # 分段与占位判定（47 项）需要 Burst/PlainText/SendBoundary
 # 存储层（22 项）只需 LogStore/Record/Json
 javac -encoding UTF-8 -source 8 -target 8 -bootclasspath "$aj;$lib" -classpath $aj -nowarn -d build/t <源码...> test/BurstTest.java
@@ -153,3 +267,22 @@ java -cp "build/t;$aj" com.draftguard.BurstTest
 3. **README 补新坑**：包可见性、`getHintText` 陷阱、MediaStore 导出、force-stop 红线
 4. **CI 增加 BurstTest**：目前 CI 只跑 StoreTest + 编译 + 诊断字段守护
 5. **导出 zip 加字段说明文件**：让别人拿到数据能看懂
+"""
+
+
+def main() -> None:
+    retro = ROOT / "docs" / "RETRO.md"
+    text = retro.read_text(encoding="utf-8")
+    if "十三、第三轮" not in text:
+        retro.write_text(text.rstrip() + RETRO_ADD, encoding="utf-8")
+        print("  ✓ RETRO.md：新增第十三、十四节（第三轮经验与总规律）")
+    else:
+        print("  · RETRO.md 已包含第三轮")
+
+    state = ROOT / "PROJECT_STATE.md"
+    state.write_text(PROJECT_STATE, encoding="utf-8")
+    print("  ✓ PROJECT_STATE.md：重写至 v2.27.1（三页结构 / 69 项测试 / 红线清单）")
+
+
+if __name__ == "__main__":
+    main()

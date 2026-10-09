@@ -51,6 +51,16 @@ DraftGuard's answer: **the text should hit disk while you type, not when you hit
 - **Clearing records backs up first**, to `Download/DraftGuard/backup/`.
 - **A diagnostic probe** (`ProbeReceiver`) lets you read the app's internal state over `adb`.
 
+### Pages
+
+- **Records** — one line of status up top, a search box, three controls, then the records
+  themselves. Each entry is a card with the app's icon.
+- **Apps** — every app that has been recorded, with its icon, name and row count; tap to read
+  that app's full history grouped by day.
+- **Tools** — capture status, live preview, today's stats and the app list, plus collapsible
+  **Settings** (booleans are real switches) and **Diagnostics** (all 41 internal counters,
+  including the last 25 raw accessibility events).
+
 ## Privacy
 
 | | |
@@ -77,7 +87,7 @@ a factory reset will lose them. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTI
 ## Install
 
 ```bash
-adb install -r DraftGuard-2.12.2.apk
+adb install -r DraftGuard-2.27.1.apk
 ```
 
 Or copy the APK to the phone and tap it. Then:
@@ -117,7 +127,7 @@ bucketing, and a regression case for a search bug that silently skipped entire f
 No Gradle, no network, no AndroidX — just the SDK's own tools:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build-apk.ps1 -OutName 'DraftGuard-2.12.2.apk'
+powershell -ExecutionPolicy Bypass -File build-apk.ps1 -OutName 'DraftGuard-2.27.1.apk'
 ```
 
 `aapt2 compile` → `aapt2 link` → `javac` → `d8` → repack → `zipalign` → `apksigner` → verify.
