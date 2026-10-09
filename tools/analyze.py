@@ -34,6 +34,16 @@ def ms_of(iso: str) -> int:
         return 0
 
 
+def is_localized_edit(a: str, b: str) -> bool:
+    cp = common_prefix(a, b)
+    if cp < 3:
+        return False
+    ra, rb = a[cp:], b[cp:]
+    if len(ra) <= 4 and len(rb) <= 4:
+        return True
+    return bool(ra) and bool(rb) and (ra.startswith(rb) or rb.startswith(ra))
+
+
 def common_prefix(a: str, b: str) -> int:
     n = min(len(a), len(b))
     i = 0
@@ -69,6 +79,9 @@ def mergeable(cur: dict, nxt: dict) -> bool:
     if is_full_rewrite(a, b):
         return False
     if common_prefix(a, b) >= MIN_COMMON_PREFIX:
+        return True
+    # 局部改一处（锤他→锤它）：共同开头在中间分叉，前缀判据失效
+    if is_localized_edit(a, b) and gap <= 5 * 60 * 1000:
         return True
     # 短间隔 + 短内容 + 共用实义字 ⇒ 整词打错重打（实测 来发展 → 开发者）
     gap = ms_of(nxt["ts"]) - ms_of(cur["ts"])

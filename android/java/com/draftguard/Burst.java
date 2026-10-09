@@ -64,6 +64,13 @@ final class Burst {
     /** 判为"改一个词"的最大长度 */
     private static final int RAPID_EDIT_MAX = 8;
 
+    /** "局部改一处"允许的最大间隔（改字通常紧接着发生） */
+    private static final long LOCAL_EDIT_MS = 5 * 60 * 1000L;
+    /** 判定"局部改一处"所需的最短共同开头 */
+    private static final int LOCAL_EDIT_MIN_PREFIX = 3;
+    /** 分叉后两边剩余都这么短，就认为是在改同一处 */
+    private static final int LOCAL_EDIT_MAX_TAIL = 4;
+
     String app = "";
     String field = "";
     /** 该段最后成型的文本 */
@@ -129,6 +136,29 @@ final class Burst {
         }
         Collections.reverse(out);
         return out;
+    }
+
+    /**
+     * 是不是"同一段话里改了一处"。
+     *
+     * 特征：共同开头之后，两边剩下的内容都很短，或两边剩下的内容同尾（互为前缀）。
+     *
+     * 用来识别"锤他→锤它""可以买→可以吗"这种中间一个字的修正 ——
+     * 这类修正不满足"以对方开头"，只靠前缀判据会漏合
+     * （用户看豆包聊天记录时发现的问题）。
+     */
+    private static boolean isLocalizedEdit(String a, String b) {
+        int cp = commonPrefix(a, b);
+        if (cp < LOCAL_EDIT_MIN_PREFIX) {
+            return false;
+        }
+        String ra = a.substring(cp);
+        String rb = b.substring(cp);
+        if (ra.length() <= LOCAL_EDIT_MAX_TAIL && rb.length() <= LOCAL_EDIT_MAX_TAIL) {
+            return true;
+        }
+        // 剩余互为前缀（同尾）：<…锤它腿还在动> / <…戳它腿还在动>
+        return !ra.isEmpty() && !rb.isEmpty() && (ra.startsWith(rb) || rb.startsWith(ra));
     }
 
     /**
@@ -207,6 +237,23 @@ final class Burst {
         //   ev: 16 EditText [你好] → [你好呀] → [小朋友]
         // 所以"靠清空判边界"在微信里失效，只能靠共同开头这一形态特征。
         if (commonPrefix(a, b) >= MIN_COMMON_PREFIX) {
+            return true;
+        }
+
+        // ── 局部修改：同一段话只改了一个字（共同开头在中间分叉）──
+        //
+        // 这是用户看豆包聊天记录时发现的漏合：
+        //   02:06:26 <…半死不活锤他>  →  02:06:28 <…半死不活锤它>   （只差 1 字）
+        //   12:24:23 <这个可以买>     →  12:24:25 <这个可以吗>      （只差 1 字）
+        // 两者前 20 多字完全一样，只有中间一个字不同 —— 属于"改错别字"，
+        // 但"新文本以旧文本开头"的判据在这里失效（分叉在中间，不在末尾）。
+        //
+        // 判据：共同开头足够长 + 分叉之后两边剩余部分都很短（都在改同一处）。
+        //   · <…锤他> → <…锤它>：两边剩余都是 1 字 ⇒ 局部改动，合并
+        //   · <…锤它腿还在动> → <…戳它腿还在动>：剩余 5 字 vs 5 字（都是"腿还在动"），
+        //     虽然超了 4 字阈值，但两边**互为前缀**（完全同尾），也判为局部改动
+        //   · <你好呀> → <小朋友>：共同开头 0 ⇒ 不是局部改动
+        if (isLocalizedEdit(a, b) && gap <= LOCAL_EDIT_MS) {
             return true;
         }
 

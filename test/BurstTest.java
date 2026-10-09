@@ -189,6 +189,22 @@ public class BurstTest {
         check("短句微调不算整段重写", !Burst.isFullRewrite("你好呀我", "你好呀我很"), "误判为重写");
         check("换句子算整段重写", Burst.isFullRewrite("第一句话在这里哦", "完全不同的另一段内容"), "未识别");
 
+        System.out.println("\n== 15. 中间改一个字（豆包实录：锤他→锤它、可以买→可以吗）==");
+        SendBoundary.resetForTest();
+        List<Burst> b15 = Burst.group(streamSec(APP, F, 0,
+                "没有这个是个实验的臭虫半死不活锤他",
+                "没有这个是个实验的臭虫半死不活锤它"));
+        check("长句中改 1 字：合并为 1 段", b15.size() == 1, dump(b15));
+        check("取改对后的内容", b15.size() == 1
+                        && "没有这个是个实验的臭虫半死不活锤它".equals(b15.get(0).text),
+                b15.isEmpty() ? "空" : b15.get(0).text);
+
+        List<Burst> b15b = Burst.group(streamSec(APP, F, 0, "这个可以买", "这个可以吗"));
+        check("短句中改 1 字：合并", b15b.size() == 1, dump(b15b));
+
+        List<Burst> b15c = Burst.group(streamSec(APP, F, 0, "你好呀", "小朋友"));
+        check("无共同开头：仍分段", b15c.size() == 2, dump(b15c));
+
         System.out.println("\n== 14. 切出去很久回来接着写草稿（应合并）==");
         SendBoundary.resetForTest();   // 见第 12 项说明：必须先清掉全局发送状态
         List<LogStore.Row> b14 = new ArrayList<LogStore.Row>();
