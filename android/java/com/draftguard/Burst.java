@@ -90,9 +90,27 @@ final class Burst {
         for (LogStore.Row r : rows) {
             raw.add(fromRow(r));
         }
+        // 排序键必须是「应用 + 输入框 + 时间」，不能只按时间。
+        //
+        // 踩过的坑（用户实录）：在豆包里打一段话 → 中途切去拼多多搜了一下 →
+        // 回来接着打。只按时间排的话，拼多多那条会插进豆包的两条之间，
+        // 于是 mergeable() 因"不是同一个应用"返回 false，同一段话被拆成两段：
+        //   [896] 12:51:35 nova      <我想放的久一点啦这个保质期60天>
+        //   [897] 12:52:40 pinduoduo <鸡肉肠>
+        //   [898] 12:53:06 nova      <我想放的久一点啦这个保质期60天，>
+        //
+        // 按输入框分组排序后，同一框的记录必然相邻，跨应用切换不再打断分段。
         Collections.sort(raw, new Comparator<Burst>() {
             @Override
             public int compare(Burst a, Burst b) {
+                int c = a.app.compareTo(b.app);
+                if (c != 0) {
+                    return c;
+                }
+                c = a.field.compareTo(b.field);
+                if (c != 0) {
+                    return c;
+                }
                 return Long.compare(msOf(a.firstTs), msOf(b.firstTs));
             }
         });
@@ -121,6 +139,13 @@ final class Burst {
                 content.add(b);
             }
         }
+        // 上面按"应用+输入框"分组排序会打乱时间次序，展示前按时间重排回来
+        Collections.sort(content, new Comparator<Burst>() {
+            @Override
+            public int compare(Burst a, Burst b) {
+                return Long.compare(msOf(a.firstTs), msOf(b.firstTs));
+            }
+        });
         return content;
     }
 
