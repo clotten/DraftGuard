@@ -865,11 +865,12 @@ public class MainActivity extends Activity {
         return s.length() <= n ? s : "…" + s.substring(s.length() - n);
     }
 
-    // ── 服务状态：四态。关键区别是"在系统列表里"≠"真的连上了" ──
-    private static final int SVC_OFF = 0;        // 没启用
-    private static final int SVC_CONNECTING = 1; // 在列表里，但还刚启动，给它一点时间
-    private static final int SVC_STALLED = 2;    // 在列表里，却一直没连上（被系统停用）
-    private static final int SVC_OK = 3;         // 真的连上了
+    // ── 服务状态 ──
+    private static final int SVC_OFF = 0;         // 我们的服务没启用
+    private static final int SVC_CONNECTING = 1;  // 刚启动，还在连
+    private static final int SVC_STALLED = 2;     // 服务开着却连不上（被系统停用）
+    private static final int SVC_OK = 3;          // 正常
+    private static final int SVC_MASTER_OFF = 4;  // 列表里有我们，但系统总开关是关的
 
     /** Activity 启动时刻，用于"宽限期"判断 */
     private long launchedAt;
@@ -880,29 +881,118 @@ public class MainActivity extends Activity {
     /**
      * 服务状态。
      *
-     * 踩过的坑：原来只判断"是否出现在 enabled_accessibility_services 里"，
-     * 而 MIUI 停用服务后**列表条目仍然保留**，于是界面一直显示"正在记录"，
-     * 实际一条都不记 —— 用户看着是好的，数据却在丢。
+     * 踩过的坑（两次）：
+     *  1) 原来只判断"是否出现在 enabled_accessibility_services 里"，
+     *     而 MIUI 停用服务后列表条目仍保留 → 界面显示"正在记录"，实际一条不记。
+     *  2) 用户"在列表里打开了 DraftGuard"却仍报停用 —— 因为 MIUI 无障碍页
+     *     **顶部还有一个总开关**（Settings.Secure.ACCESSIBILITY_ENABLED），
+     *     总开关关着时，列表里的服务也不会被绑定。
+     *     所以这两种情况必须分开说，指引才准确。
      */
-    private int serviceState() {
-        if (TypelogService.running) {
-            return SVC_OK;
+    // ── 服务状态 ──
+
+    /** Activity 启动时刻，用于"宽限期"判断 */
+
+    /** 服务连接宽限期：刚打开应用时服务往往还在连接，不能立刻报"被停用" */
+
+    /** 最近一次状态探测的原始依据（写进诊断，方便排查"为什么这么判断"） */
+    private volatile String lastStateProbe = "";
+
+    /**
+     * 系统无障碍总开关是否打开。
+     *
+     * 用 AccessibilityManager（系统给应用准备的 API），
+     * 不再依赖解析 Settings.Secure —— 实测本机读不到那个值，
+     * 会把"已启用"误判成"未启用"。
+     */
+    private boolean accessibilityMasterOn() {
+        try {
+            android.view.accessibility.AccessibilityManager am =
+                    (android.view.accessibility.AccessibilityManager)
+                            getSystemService(Context.ACCESSIBILITY_SERVICE);
+            return am != null && am.isEnabled();
+        } catch (Throwable t) {
+            return false;
         }
-        boolean listed = false;
+    }
+
+    /** 系统报告的"已启用无障碍服务"里是否包含我们 */
+    private boolean listedByManager() {
+        try {
+            android.view.accessibility.AccessibilityManager am =
+                    (android.view.accessibility.AccessibilityManager)
+                            getSystemService(Context.ACCESSIBILITY_SERVICE);
+            if (am == null) {
+                return false;
+            }
+            java.util.List<android.accessibilityservice.AccessibilityServiceInfo> list =
+                    am.getEnabledAccessibilityServiceList(
+                            android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK);
+            if (list == null) {
+                return false;
+            }
+            for (android.accessibilityservice.AccessibilityServiceInfo info : list) {
+                android.content.pm.ResolveInfo ri = info.getResolveInfo();
+                if (ri == null || ri.serviceInfo == null) {
+                    continue;
+                }
+                if (getPackageName().equals(ri.serviceInfo.packageName)
+                        && ri.serviceInfo.name != null
+                        && ri.serviceInfo.name.contains("TypelogService")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /** 备用判据：secure settings 里是否列了我们的服务（有些 ROM 上读不到） */
+    private boolean listedBySettings() {
         try {
             String flat = Settings.Secure.getString(getContentResolver(),
                     Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-            if (flat != null) {
-                ComponentName me = new ComponentName(this, TypelogService.class);
-                listed = flat.contains(me.flattenToString())
-                        || flat.contains(me.flattenToShortString());
+            if (flat == null) {
+                return false;
             }
+            ComponentName me = new ComponentName(this, TypelogService.class);
+            return flat.contains(me.flattenToString())
+                    || flat.contains(me.flattenToShortString());
         } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * 服务状态。
+     *
+     * 踩过的坑（三次，逐步收紧）：
+     *  1) 只判断"是否在 enabled_accessibility_services 里" → MIUI 停用后条目仍在，
+     *     界面显示"正在记录"而实际不记。
+     *  2) 改用 secure settings 判断"已启用" → 本机读不到该值，误判成"未启用"。
+     *  3) 现在以 AccessibilityManager 为主判据（系统给应用的正式 API），
+     *     secure settings 只作辅助；并把探测依据记录到 lastStateProbe 供诊断。
+     */
+    private int serviceState() {
+        boolean master = accessibilityMasterOn();
+        boolean byManager = listedByManager();
+        boolean bySettings = listedBySettings();
+        boolean listed = byManager || bySettings;
+        lastStateProbe = "总开关=" + (master ? "开" : "关")
+                + "　服务在已启用列表=" + (byManager ? "是" : "否")
+                + "　secure设置里有=" + (bySettings ? "是" : "否")
+                + "　服务已连接=" + (TypelogService.running ? "是" : "否");
+
+        if (TypelogService.running) {
+            return SVC_OK;
+        }
+        if (!master) {
+            // 总开关关着：无论列表里有没有我们，服务都不会被绑定
+            return SVC_MASTER_OFF;
         }
         if (!listed) {
             return SVC_OFF;
         }
-        // 在列表里但没连上：可能是刚启动还在连，也可能已被系统停用
         return (System.currentTimeMillis() - launchedAt < CONNECT_GRACE_MS)
                 ? SVC_CONNECTING : SVC_STALLED;
     }
@@ -918,13 +1008,33 @@ public class MainActivity extends Activity {
                 return "● 已开启，正在记录";
             case SVC_CONNECTING:
                 return "◌ 正在连接无障碍服务…";
+            case SVC_MASTER_OFF:
+                return "⚠ 系统的「无障碍」总开关是关的 —— 现在打的字不会记录\n"
+                        + "   到 系统设置 → 无障碍，把**最上面**的总开关打开\n"
+                        + "   （只在下面列表里打开 DraftGuard 还不够）";
             case SVC_STALLED:
-                return "⚠ 服务已被系统停用 —— 现在打的字**不会**被记录\n"
+                return "⚠ 服务已被系统停用 —— 现在打的字不会记录\n"
                         + "   到 系统设置 → 无障碍 → 重新打开 DraftGuard\n"
                         + "   （MIUI 等系统会自行停用，建议同时把省电策略设为「无限制」）";
             default:
                 return "○ 未开启 —— 现在不会记录任何内容\n"
                         + "   到 系统设置 → 无障碍 → 打开 DraftGuard";
+        }
+    }
+
+/** 状态名（诊断面板显示判定结果） */
+    private String serviceStateName() {
+        switch (serviceState()) {
+            case SVC_OK:
+                return "已连接";
+            case SVC_CONNECTING:
+                return "连接中";
+            case SVC_STALLED:
+                return "被系统停用";
+            case SVC_MASTER_OFF:
+                return "总开关关着";
+            default:
+                return "未启用";
         }
     }
 
@@ -937,7 +1047,66 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 宽限期后检查一次：刷新状态显示，必要时弹窗提醒 */
+    /** 上次弹"服务没在记录"的时间，用于节流 */
+    private long lastStalledWarnAt;
+
+    /**
+     * 服务没在记录时给一个弹窗。
+     *
+     * 只在"以前确实开过"（Prefs.serviceEnabledAt > 0）时提醒，
+     * 免得第一次装应用就弹一个用户看不懂的东西；并做 5 分钟节流。
+     */
+    private void warnIfServiceStalled() {
+        int st = serviceState();
+        boolean abnormal = (st == SVC_STALLED || st == SVC_MASTER_OFF
+                || (st == SVC_OFF && Prefs.serviceEnabledAt(this) > 0));
+        if (!abnormal) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastStalledWarnAt < 5 * 60 * 1000L) {
+            return;
+        }
+        lastStalledWarnAt = now;
+
+        String why;
+        if (st == SVC_MASTER_OFF) {
+            why = "系统的「无障碍」总开关是关着的。\n\n"
+                    + "注意：只在下面的服务列表里打开 DraftGuard 还不够，"
+                    + "**页面最上方**的总开关也要打开。";
+        } else if (st == SVC_STALLED) {
+            why = "无障碍服务曾经打开过，但现在没有连接。\n\n"
+                    + "常见原因：系统（尤其是 MIUI）为了省电会自动停用它。";
+        } else {
+            why = "无障碍服务没有打开。";
+        }
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("记录已经停了")
+                .setMessage("现在打的字不会被保存。\n\n" + why + "\n\n"
+                        + "打开后建议顺手做两件事：\n"
+                        + "· 应用管理 → DraftGuard → 省电策略 → 无限制\n"
+                        + "· 打开「自启动」权限\n\n"
+                        + "回到本应用后，「工具」页会显示「● 已开启，正在记录」。")
+                .setPositiveButton("去系统设置", (d, w) -> openAccessibilitySettings())
+                .setNegativeButton("知道了", null)
+                .show();
+    }
+
+
+        /** 采集状态文案（含"该怎么办"） */
+        /** 去系统无障碍设置 */
+        /** 上次弹"服务没在记录"的时间，用于节流 */
+
+    /**
+     * 服务没在记录时给一个弹窗。
+     *
+     * 只在"以前确实开过"（Prefs.serviceEnabledAt > 0）时提醒，
+     * 免得第一次装应用就弹一个用户看不懂的东西；并做 5 分钟节流。
+     */
+            /** 采集状态文案（含"该怎么办"） */
+        /** 去系统无障碍设置 */
+        /** 宽限期后检查一次：刷新状态显示，必要时弹窗提醒 */
     private void checkAndWarnService() {
         if (statusView != null) {
             setCardText(statusView, "采集状态", serviceStateText());
@@ -946,7 +1115,6 @@ public class MainActivity extends Activity {
     }
 
     /** 上次弹"服务已停用"的时间，用于节流 */
-    private long lastStalledWarnAt;
 
     /**
      * 服务被系统停用时给一个弹窗。
@@ -954,32 +1122,7 @@ public class MainActivity extends Activity {
      * 只在"以前确实开过"（Prefs.serviceEnabledAt > 0）时提醒，
      * 免得第一次装应用就弹一个用户看不懂的东西；并做 5 分钟节流。
      */
-    private void warnIfServiceStalled() {
-        int st = serviceState();
-        boolean previouslyOn = Prefs.serviceEnabledAt(this) > 0;
-        if (st != SVC_STALLED && !(st == SVC_OFF && previouslyOn)) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now - lastStalledWarnAt < 5 * 60 * 1000L) {
-            return;
-        }
-        lastStalledWarnAt = now;
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("记录已经停了")
-                .setMessage("无障碍服务没有连接，现在打的字不会被保存。\n\n"
-                        + "常见原因：系统（尤其是 MIUI）为了省电会自动停用它。\n\n"
-                        + "打开后建议顺手做两件事：\n"
-                        + "· 应用管理 → DraftGuard → 省电策略 → 无限制\n"
-                        + "· 打开「自启动」权限\n\n"
-                        + "打开后回到本应用，「工具」页会显示「已开启，正在记录」。")
-                .setPositiveButton("去系统设置", (d, w) -> openAccessibilitySettings())
-                .setNegativeButton("知道了", null)
-                .show();
-    }
-
-
-        /** 截取命中位置前后各 60 字，方便快速确认是不是要找的那段 */
+            /** 截取命中位置前后各 60 字，方便快速确认是不是要找的那段 */
         /**
      * 看今天全部记录。
      *
@@ -1552,6 +1695,10 @@ public class MainActivity extends Activity {
         sb.append("\n最近 25 条原始事件：\n");
         sb.append("诊断日志开关：").append(Prefs.debug(this) ? "已开启" : "未开启")
           .append("　无障碍服务：").append(TypelogService.running ? "已连接" : "未连接").append("\n");
+        // 状态判断的原始依据：出问题时先看这一行，就知道是"读不到"还是"确实没开"
+        serviceState();
+        sb.append("状态探测依据：").append(lastStateProbe)
+          .append("　判定=").append(serviceStateName()).append("\n");
         java.util.List<String> diag = TypelogService.DIAG;
         synchronized (diag) {
             if (!diag.isEmpty()) {

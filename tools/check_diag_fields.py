@@ -18,7 +18,10 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(r"E:\desktop\酒馆\tools\ziJi\android\java\com\draftguard")
+# 路径相对于本脚本定位，不写死绝对路径 ——
+# 否则在 CI（Linux）上会因为 "E:\..." 不存在而报错退出，
+# 表现为 "Storage tests failed"，但真正的原因和存储测试毫无关系。
+ROOT = Path(__file__).resolve().parent.parent / "android" / "java" / "com" / "draftguard"
 MAIN = ROOT / "MainActivity.java"
 
 # 这些是"给用户看的开关/结果"，不是诊断信号，不要求出现在诊断面板
