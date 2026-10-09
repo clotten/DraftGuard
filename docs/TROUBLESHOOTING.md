@@ -443,3 +443,50 @@ adb shell settings put secure accessibility_enabled 1
 adb shell settings put secure enabled_accessibility_services com.draftguard/com.draftguard.TypelogService
 # then run `adb install -r` once — the package-update event re-binds it
 ```
+
+---
+
+## 13. UI implementation pitfalls met in this project
+
+Collected here because each one cost a round trip with the user. They are all about *where* code
+lives, not about algorithms.
+
+### 13.1 Refreshing content above the scroll position shifts what the user is reading
+
+Reported as "the screen jumps back to the statistics area whenever an event arrives". Updating the
+top cards changed their height, which moved everything below — the viewport then showed whatever
+now occupied that offset. **Gate refresh on visibility:** only update a card that is fully inside
+the ScrollView's viewport, remember that a refresh was skipped, and apply it on the next scroll.
+(A scroll position is a promise to the user; see also §10.)
+
+### 13.2 `ListView` overwrites each item's `LayoutParams`
+
+Setting `margin` on the row view does nothing — `AbsListView` replaces the LayoutParams with its
+own, so cards render edge to edge as one block. Use the list's **divider height** for the gap, and
+`setPadding` + `setClipToPadding(false)` on the list for the outer margins.
+
+### 13.3 Put refresh logic where the state is known
+
+The diagnostic card was filled by `refreshTools()`, which only runs on a page switch or an incoming
+event — so expanding the section left it stuck on "读取中…" until something else happened.
+The fill belongs in `buildDiagBox()`, which is the code that knows whether the section is expanded
+and whether the view exists. **If a refresh can be "nobody calls it", it will be.**
+
+### 13.4 Async choosers must rebuild after the callback, not before
+
+`chooserRow` ran `applySetting(...)` (which opens a dialog) and then immediately rebuilt the list —
+before the user had picked anything, so the displayed value stayed stale until the next tap.
+Dialogs that set a value asynchronously need to run the rebuild in their callback.
+
+### 13.5 One entry point per concern, or the copies drift
+
+Settings text, setting application, and diagnostic text each exist in **two** places (the tools page
+and a dialog). When they were written twice, migrating the page silently lost six diagnostic
+sections. They are now single methods — `settingItems()`, `applySetting()`, `diagText()` —
+that both callers share.
+
+### 13.6 A guard script must move with the thing it guards
+
+After the diagnostic content moved into `diagText()`, `tools/check_diag_fields.py` still looked at
+the old `showDiag()` and reported five fields as missing while they were plainly on screen.
+Widen the check when the content moves, or the guard itself becomes noise.

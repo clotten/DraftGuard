@@ -45,3 +45,8 @@ logs-*/
 dbg*.py
 t*.txt
 test_out.txt
+
+# 一次性补丁脚本（效果已进代码，无复用价值，不留在仓库）
+tools/patch_step*.py
+tools/dedup*.py
+tools/*_oneoff.py

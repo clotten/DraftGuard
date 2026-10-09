@@ -302,6 +302,8 @@ def main() -> int:
 
     text = "\n".join(lines) + "\n"
     out = Path(args.out)
+    if out.parent and not out.parent.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)   # 输出目录不存在时自己建
     out.write_text(text, encoding="utf-8")
     print(f"已写出 {out}")
     print(f"  段数 {len(bursts)}（原始 {len(rows)} 版本），合计 {total_chars} 字")
