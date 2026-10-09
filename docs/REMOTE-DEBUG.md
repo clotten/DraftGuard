@@ -176,3 +176,43 @@ adb logcat -d -s DraftGuardProbe                # 看：微信有没有送事件
 
 发现问题后我改代码、重新构建、`adb install -r` 覆盖安装，立刻再验一遍 ——
 整个循环不用你截图，也不用你描述现象。
+
+---
+
+## Re-binding the accessibility service (MIUI)
+
+**Symptom:** the app says recording has stopped, while the system's accessibility list still
+shows DraftGuard as **开启 (on)**. `dumpsys accessibility` reports `Bound services:{}`, and the
+in-app probe reports `service.running=false`.
+
+**Why it happens:** installing an update or force-stopping the app kills the process, and MIUI
+does **not** rebind an accessibility service afterwards — even though the list entry survives and
+still reads "on". So every install leaves the app unable to record until the service is toggled
+again. Expect this after **every** build you install.
+
+**Stable recovery sequence** (verified on MIUI 12.5 / Android 11). Order matters — writing the
+service list alone does nothing:
+
+```bash
+adb shell settings put secure accessibility_enabled 0
+adb shell settings put secure enabled_accessibility_services null
+sleep 2
+adb shell settings put secure accessibility_enabled 1          # master flag first
+sleep 1
+adb shell settings put secure enabled_accessibility_services com.draftguard/com.draftguard.TypelogService
+# verify:
+adb shell dumpsys accessibility | grep 'Bound services'
+```
+
+**What does *not* work:** writing `enabled_accessibility_services` on its own; writing
+`accessibility_enabled 1` on its own; assuming the flag reflects a user-visible master switch.
+On this MIUI build the accessibility page has **no master switch at all** —
+`accessibility_enabled` is a *consequence* of having an enabled service, not a control the user
+can find. An earlier in-app message that told the user to "turn on the master switch" sent them
+looking for something that does not exist; the guidance is now "open the list, turn DraftGuard
+off and on again".
+
+**In-app reporting:** the app distinguishes "not enabled", "still connecting" (10 s grace after
+launch), and "enabled but not connected", and only raises the blocking dialog 22 s after launch —
+so a service that is merely slow to rebind does not trigger a false alarm, while a genuinely dead
+one is reported on the status card immediately.

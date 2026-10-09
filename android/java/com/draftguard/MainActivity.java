@@ -130,6 +130,13 @@ public class MainActivity extends Activity {
                 refreshList();
                 if (currentPage == 2) {
                     refreshTools();
+                    // 诊断展开时也要跟着刷新。
+                    // 之前只在"展开那一刻"填一次，之后事件来了内容不更新，
+                    // 看起来就像"卡住了 / 不实时"。
+                    if (diagExpanded && now - lastDiagRefresh > DIAG_REFRESH_MS) {
+                        lastDiagRefresh = now;
+                        refreshDiagBox();
+                    }
                 }
             }
         }
@@ -168,8 +175,11 @@ public class MainActivity extends Activity {
         refreshSummary();
         refreshList();
         refreshTools();
-        // 宽限期之后再判断服务是否真的连上，避免刚打开就误报"已停用"
-        ui.postDelayed(this::checkAndWarnService, CONNECT_GRACE_MS + 1500);
+        // 宽限期后先刷新状态显示；**再等一段**才考虑弹窗。
+        // 实测：安装/force-stop 之后系统重新绑定无障碍服务可能要 8 秒以上，
+        // 只查一次会在服务马上要连上时误报"记录已经停了"。
+        ui.postDelayed(this::refreshServiceCard, CONNECT_GRACE_MS + 1500);
+        ui.postDelayed(this::warnIfServiceStalled, 22000);
     }
 
     @Override
@@ -876,7 +886,7 @@ public class MainActivity extends Activity {
     private long launchedAt;
 
     /** 服务连接宽限期：刚打开应用时服务往往还在连接，不能立刻报"被停用" */
-    private static final long CONNECT_GRACE_MS = 6000;
+    private static final long CONNECT_GRACE_MS = 10000;
 
     /**
      * 服务状态。
@@ -974,21 +984,15 @@ public class MainActivity extends Activity {
      *     secure settings 只作辅助；并把探测依据记录到 lastStateProbe 供诊断。
      */
     private int serviceState() {
-        boolean master = accessibilityMasterOn();
         boolean byManager = listedByManager();
         boolean bySettings = listedBySettings();
         boolean listed = byManager || bySettings;
-        lastStateProbe = "总开关=" + (master ? "开" : "关")
-                + "　服务在已启用列表=" + (byManager ? "是" : "否")
+        lastStateProbe = "服务在已启用列表=" + (byManager ? "是" : "否")
                 + "　secure设置里有=" + (bySettings ? "是" : "否")
                 + "　服务已连接=" + (TypelogService.running ? "是" : "否");
 
         if (TypelogService.running) {
             return SVC_OK;
-        }
-        if (!master) {
-            // 总开关关着：无论列表里有没有我们，服务都不会被绑定
-            return SVC_MASTER_OFF;
         }
         if (!listed) {
             return SVC_OFF;
@@ -1008,17 +1012,18 @@ public class MainActivity extends Activity {
                 return "● 已开启，正在记录";
             case SVC_CONNECTING:
                 return "◌ 正在连接无障碍服务…";
-            case SVC_MASTER_OFF:
-                return "⚠ 系统的「无障碍」总开关是关的 —— 现在打的字不会记录\n"
-                        + "   到 系统设置 → 无障碍，把**最上面**的总开关打开\n"
-                        + "   （只在下面列表里打开 DraftGuard 还不够）";
             case SVC_STALLED:
-                return "⚠ 服务已被系统停用 —— 现在打的字不会记录\n"
-                        + "   到 系统设置 → 无障碍 → 重新打开 DraftGuard\n"
-                        + "   （MIUI 等系统会自行停用，建议同时把省电策略设为「无限制」）";
+                // 实测 MIUI：列表里显示"开启"，实际服务并没连上，
+                // 而系统那个 accessibility_enabled 标志也不是用户能打开的开关
+                // （本机无障碍页根本没有总开关）。所以指引统一成"关掉再打开一次"。
+                return "⚠ 服务没有真正连上 —— 现在打的字不会记录\n"
+                        + "   到 系统设置 → 无障碍 → 已下载的应用 → DraftGuard，\n"
+                        + "   把它**关掉再打开一次**\n"
+                        + "   （列表里显示「开启」却没连上，在 MIUI 上很常见；\n"
+                        + "     同时建议把省电策略设为「无限制」并打开「自启动」）";
             default:
                 return "○ 未开启 —— 现在不会记录任何内容\n"
-                        + "   到 系统设置 → 无障碍 → 打开 DraftGuard";
+                        + "   到 系统设置 → 无障碍 → 已下载的应用 → 打开 DraftGuard";
         }
     }
 
@@ -1058,7 +1063,7 @@ public class MainActivity extends Activity {
      */
     private void warnIfServiceStalled() {
         int st = serviceState();
-        boolean abnormal = (st == SVC_STALLED || st == SVC_MASTER_OFF
+        boolean abnormal = (st == SVC_STALLED
                 || (st == SVC_OFF && Prefs.serviceEnabledAt(this) > 0));
         if (!abnormal) {
             return;
@@ -1069,22 +1074,18 @@ public class MainActivity extends Activity {
         }
         lastStalledWarnAt = now;
 
-        String why;
-        if (st == SVC_MASTER_OFF) {
-            why = "系统的「无障碍」总开关是关着的。\n\n"
-                    + "注意：只在下面的服务列表里打开 DraftGuard 还不够，"
-                    + "**页面最上方**的总开关也要打开。";
-        } else if (st == SVC_STALLED) {
-            why = "无障碍服务曾经打开过，但现在没有连接。\n\n"
-                    + "常见原因：系统（尤其是 MIUI）为了省电会自动停用它。";
-        } else {
-            why = "无障碍服务没有打开。";
-        }
+        String why = (st == SVC_STALLED)
+                ? "无障碍服务曾经打开过，但现在没有真正连上。\n\n"
+                  + "在「已下载的应用」列表里它可能仍显示「开启」，"
+                  + "这是 MIUI 上很常见的假象。"
+                : "还没有打开无障碍服务。";
 
         new android.app.AlertDialog.Builder(this)
                 .setTitle("记录已经停了")
                 .setMessage("现在打的字不会被保存。\n\n" + why + "\n\n"
-                        + "打开后建议顺手做两件事：\n"
+                        + "解决：到 系统设置 → 无障碍 → 已下载的应用 → DraftGuard，\n"
+                        + "把它「关掉再打开一次」。\n\n"
+                        + "顺手再做两件事更稳：\n"
                         + "· 应用管理 → DraftGuard → 省电策略 → 无限制\n"
                         + "· 打开「自启动」权限\n\n"
                         + "回到本应用后，「工具」页会显示「● 已开启，正在记录」。")
@@ -1107,11 +1108,10 @@ public class MainActivity extends Activity {
             /** 采集状态文案（含"该怎么办"） */
         /** 去系统无障碍设置 */
         /** 宽限期后检查一次：刷新状态显示，必要时弹窗提醒 */
-    private void checkAndWarnService() {
+    private void refreshServiceCard() {
         if (statusView != null) {
             setCardText(statusView, "采集状态", serviceStateText());
         }
-        warnIfServiceStalled();
     }
 
     /** 上次弹"服务已停用"的时间，用于节流 */
@@ -1288,6 +1288,29 @@ public class MainActivity extends Activity {
     }
 
     /** 一行设置项：显示当前值，点击弹出对应选择 */
+/** 诊断刷新节流间隔 */
+    private static final long DIAG_REFRESH_MS = 2000;
+    private long lastDiagRefresh;
+
+    /** 只刷新诊断卡片内容（不重建整个区块，避免闪烁与滚动跳动） */
+    private void refreshDiagBox() {
+        if (!diagExpanded) {
+            return;
+        }
+        if (diagView == null) {
+            buildDiagBox();
+            return;
+        }
+        new Thread(() -> {
+            final String d = diagText().toString();
+            ui.post(() -> {
+                if (diagView != null) {
+                    setCardText(diagView, "事件与存储", d);
+                }
+            });
+        }, "typelog-diag-refresh").start();
+    }
+
     /** 更新折叠标题的箭头 */
     private void updateHeader(TextView t, String title, boolean expanded) {
         if (t != null) {
@@ -1363,14 +1386,7 @@ public class MainActivity extends Activity {
         // 展开后**立刻**填充。
         // 踩过的坑：填充原先只写在 refreshTools() 里，而它仅在切页或事件到来时执行，
         // 于是展开诊断后一直停在"读取中…"，要等下次有事件才显示。
-        new Thread(() -> {
-            final String d = diagText().toString();
-            ui.post(() -> {
-                if (diagView != null) {
-                    setCardText(diagView, "事件与存储", d);
-                }
-            });
-        }, "typelog-diag").start();
+        refreshDiagBox();
     }
 
     /** 一行开关：左标签，右 Switch */
