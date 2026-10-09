@@ -74,6 +74,13 @@ public class MainActivity extends Activity {
     /** 看记录时是否显示原始逐条版本（默认合并成整段，见 Burst） */
     private boolean showRawRows = false;
 
+    // ── 第三页（工具）：状态卡片 + 设置 + 诊断 ──────────────
+    private android.widget.ScrollView page3;
+    private LinearLayout toolsRoot;
+    private TextView statusView, liveView, statsView, appsView, diagView;
+    private TextView navToolsText;
+    private View navToolsBar;
+
     // ── 导航与第二页（应用列表）────────────────────────────────
     private android.widget.ScrollView page2;
     private LinearLayout appsRoot;
@@ -112,6 +119,9 @@ public class MainActivity extends Activity {
                 lastStatsRefresh = now;
                 refreshSummary();
                 refreshList();
+                if (currentPage == 2) {
+                    refreshTools();
+                }
             }
         }
     };
@@ -132,6 +142,7 @@ public class MainActivity extends Activity {
             KeepAliveService.stop(this);
         }
         buildRecordsPage();
+        buildToolsPage();
     }
 
     @Override
@@ -146,6 +157,7 @@ public class MainActivity extends Activity {
         lastStatsRefresh = System.currentTimeMillis();
         refreshSummary();
         refreshList();
+        refreshTools();
     }
 
     @Override
@@ -260,119 +272,8 @@ public class MainActivity extends Activity {
     }
 
     /** 「更多」：导出、分享、诊断、清除、设置都收在这里 */
-    private void showMore() {
-        final String[] items = {
-                "导出到下载目录", "分享 zip", "诊断", "清除全部记录", "设置",
-        };
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("更多")
-                .setItems(items, (d, which) -> {
-                    switch (which) {
-                        case 0:
-                            doExportToDownloads();
-                            break;
-                        case 1:
-                            doExport();
-                            break;
-                        case 2:
-                            showDiag();
-                            break;
-                        case 3:
-                            confirmClearAll();
-                            break;
-                        default:
-                            showSettings();
-                            break;
-                    }
-                })
-                .show();
-    }
-
-
-
-    /** 诊断面板：一眼看出"断在哪一环" */
-        private void showSettings() {
-        String[] items = {
-                "后台保活：" + (Prefs.keepAlive(this) ? "开启（通知栏常驻）" : "关闭"),
-                "只记录有焦点的输入框：" + (Prefs.focusOnly(this) ? "开启" : "关闭"),
-                "忽略删除操作：" + (Prefs.ignoreDeletions(this)
-                        ? "开启（删字不新建记录）" : "关闭（删除也记录）"),
-                "排除输入法键盘事件：" + (Prefs.skipIme(this) ? "开启" : "关闭"),
-                "最少记录字数（当前 " + Prefs.minChars(this) + " 字）",
-                "保留天数（当前 " + Prefs.retentionDays(this) + " 天）",
-                "轮询兜底：" + (Prefs.polling(this) ? "开启" : "关闭"),
-                "诊断日志：" + (Prefs.debug(this) ? "开启" : "关闭"),
-                "记录文本被清空：" + (Prefs.keepEmpty(this) ? "记录" : "不记录"),
-                "不记录的 App…",
-                "显示保存位置",
-        };
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("设置")
-                .setItems(items, (d, which) -> {
-                    switch (which) {
-                        case 0:
-                            boolean kaOn = !Prefs.keepAlive(this);
-                            Prefs.setKeepAlive(this, kaOn);
-                            if (kaOn) {
-                                KeepAliveService.start(this);
-                            } else {
-                                KeepAliveService.stop(this);
-                            }
-                            toast(kaOn ? "已开启保活：通知栏会出现一条常驻通知，进程不易被系统回收"
-                                       : "已关闭保活：内存紧张时系统可能中断记录");
-                            break;
-                        case 1:
-                            Prefs.setFocusOnly(this, !Prefs.focusOnly(this));
-                            toast(Prefs.focusOnly(this)
-                                    ? "只记正在输入的框（推荐）"
-                                    : "所有可编辑框都会被记录");
-                            break;
-                        case 2:
-                            Prefs.setIgnoreDeletions(this, !Prefs.ignoreDeletions(this));
-                            toast(Prefs.ignoreDeletions(this)
-                                    ? "删字不再新建记录（只保留新增文字的那些版本）"
-                                    : "删除也会被记录");
-                            break;
-                        case 3:
-                            Prefs.setSkipIme(this, !Prefs.skipIme(this));
-                            toast("已" + (Prefs.skipIme(this) ? "排除" : "包含") + "输入法键盘事件");
-                            break;
-                        case 4:
-                            chooseMinChars();
-                            break;
-                        case 5:
-                            chooseRetention();
-                            break;
-                        case 6:
-                            Prefs.setPolling(this, !Prefs.polling(this));
-                            toast("轮询兜底已" + (Prefs.polling(this) ? "开启" : "关闭")
-                                    + "（下次生效）");
-                            break;
-                        case 7:
-                            Prefs.setDebug(this, !Prefs.debug(this));
-                            if (Prefs.debug(this)) {
-                                TypelogService.DIAG.clear();
-                            }
-                            toast("诊断日志已" + (Prefs.debug(this) ? "开启" : "关闭"));
-                            break;
-                        case 8:
-                            Prefs.setKeepEmpty(this, !Prefs.keepEmpty(this));
-                            toast("已" + (Prefs.keepEmpty(this) ? "记录" : "忽略") + "清空事件");
-                            break;
-                        case 9:
-                            chooseIgnored();
-                            break;
-                        case 10:
-                            toast("应用私有目录：/data/data/" + getPackageName() + "/files/logs/");
-                            break;
-                        default:
-                            break;
-                    }
-                })
-                .show();
-    }
-
-    private void chooseRetention() {
+        /** 诊断面板：一眼看出"断在哪一环" */
+            private void chooseRetention() {
         final int[] opts = {7, 30, 90, 365};
         String[] labels = new String[opts.length];
         for (int i = 0; i < opts.length; i++) {
@@ -427,6 +328,8 @@ public class MainActivity extends Activity {
     private void setupNav() {
         pageRoot = findViewById(R.id.page1);
         page2 = findViewById(R.id.page2);
+        page3 = findViewById(R.id.page3);
+        toolsRoot = findViewById(R.id.toolsRoot);
         appsRoot = findViewById(R.id.appsRoot);
         navRecordsText = findViewById(R.id.navRecordsText);
         navAppsText = findViewById(R.id.navAppsText);
@@ -434,6 +337,9 @@ public class MainActivity extends Activity {
         navAppsBar = findViewById(R.id.navAppsBar);
         findViewById(R.id.tabRecords).setOnClickListener(v -> switchPage(0));
         findViewById(R.id.tabApps).setOnClickListener(v -> switchPage(1));
+        findViewById(R.id.tabTools).setOnClickListener(v -> switchPage(2));
+        navToolsText = findViewById(R.id.navToolsText);
+        navToolsBar = findViewById(R.id.navToolsBar);
         switchPage(0);
     }
 
@@ -447,6 +353,7 @@ public class MainActivity extends Activity {
         currentPage = idx;
         pageRoot.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
         page2.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
+        page3.setVisibility(idx == 2 ? View.VISIBLE : View.GONE);
 
         int on = Color.parseColor("#FFFFFF");
         int off = Color.parseColor("#8B95A7");
@@ -458,9 +365,16 @@ public class MainActivity extends Activity {
         navAppsText.setTypeface(null, idx == 1 ? Typeface.BOLD : Typeface.NORMAL);
         navRecordsBar.setBackgroundColor(idx == 0 ? barOn : barOff);
         navAppsBar.setBackgroundColor(idx == 1 ? barOn : barOff);
+        if (navToolsText != null) {
+            navToolsText.setTextColor(idx == 2 ? on : off);
+            navToolsText.setTypeface(null, idx == 2 ? Typeface.BOLD : Typeface.NORMAL);
+            navToolsBar.setBackgroundColor(idx == 2 ? barOn : barOff);
+        }
 
         if (idx == 1) {
             refreshAppsPage();
+        } else if (idx == 2) {
+            refreshTools();
         }
     }
 
@@ -924,198 +838,7 @@ public class MainActivity extends Activity {
 
         /** 诊断弹窗：原来页面上的状态/实时预览/统计/应用列表都放这里 */
     /** 诊断：重构时把原来页面上的内容都收到这里，注意别丢段落 */
-    private void showDiag() {
-        final android.widget.ScrollView sc = new android.widget.ScrollView(this);
-        final TextView tv = new TextView(this);
-        tv.setTextColor(COL_FG);
-        tv.setTextSize(12);
-        tv.setPadding(dp(14), dp(12), dp(14), dp(12));
-        tv.setLineSpacing(dp(3), 1f);
-        tv.setTextIsSelectable(true);
-        tv.setText("读取中…");
-        sc.addView(tv);
-
-        new Thread(() -> {
-            final LogStore store = new LogStore(getFilesDir(), 0);
-            final String today = DAY.format(new Date());
-            final Map<String, String> labels = store.labels(today);
-            final java.util.List<LogStore.Row> rows = store.readDay(today, 0);
-            final long bytes = store.totalBytes();
-
-            int compCount = 0;
-            int total = 0;
-            Map<String, Integer> counts = new LinkedHashMap<>();
-            Map<String, Integer> chars = new LinkedHashMap<>();
-            for (LogStore.Row r : rows) {
-                if (r.text.isEmpty()) {
-                    continue;
-                }
-                total++;
-                if (r.comp) {
-                    compCount++;
-                }
-                Integer c = counts.get(r.app);
-                counts.put(r.app, c == null ? 1 : c + 1);
-                Integer mx = chars.get(r.app);
-                chars.put(r.app, mx == null ? r.chars : Math.max(mx, r.chars));
-            }
-
-            StringBuilder sb = new StringBuilder();
-
-            sb.append("── 事件计数（本次会话，服务重启会归零）──\n");
-            sb.append("收到的无障碍事件总数：").append(TypelogService.evAll).append("\n");
-            sb.append("其中文本变化事件：").append(TypelogService.evText).append("\n");
-            sb.append("取到文本并进入记录：").append(TypelogService.evCaptured).append("\n");
-            sb.append("事件里节点为空(靠兜底找回)：").append(TypelogService.evSourceNull)
-              .append(" / 兜底成功 ").append(TypelogService.evTraverseHit).append("\n");
-            sb.append("节点不是输入框：").append(TypelogService.evNotEditable).append("\n");
-            sb.append("跳过系统UI/不可记录包：").append(TypelogService.skippedSelf).append("\n");
-            sb.append("跳过输入法键盘自身事件：").append(TypelogService.skippedIme).append("\n");
-            sb.append("跳过删除操作(按设置)：").append(TypelogService.skippedDelete).append("\n");
-            sb.append("检测到点击「发送/搜索/发布」：").append(TypelogService.sendBoundaries)
-              .append(" 次（消息分段依据）\n");
-            sb.append("跳过未聚焦的框：").append(TypelogService.skippedNoFocus).append("\n");
-            sb.append("跳过占位提示/单字碎片：").append(TypelogService.skippedNoise).append("\n");
-            sb.append("跳过(设置里排除的)：").append(TypelogService.skippedIgnored).append("\n");
-            sb.append("跳过密码框：").append(TypelogService.skippedPassword).append("\n");
-            sb.append("写入失败：").append(TypelogService.errors).append("\n");
-            sb.append("本次会话落盘：").append(TypelogService.written).append(" 条\n");
-            sb.append("跳过(其它原因)：").append(TypelogService.skippedOther).append("\n");
-            sb.append("宽松判据兜底命中：").append(TypelogService.evRelaxedHit).append("\n");
-            sb.append("最近一次错误的来源包：")
-              .append(TextUtils.isEmpty(TypelogService.lastSourcePkg)
-                      ? "（无）" : TypelogService.lastSourcePkg).append("\n");
-            sb.append("最近一次错误：")
-              .append(TextUtils.isEmpty(TypelogService.lastError)
-                      ? "（无）" : TypelogService.lastError).append("\n");
-            sb.append("存储层：写入成功 ").append(LogStore.diagWrittenRows)
-              .append(" 行，累计 ").append(LogStore.diagByteCount).append(" 字节")
-              .append("，跳过 ").append(LogStore.diagSkippedRows).append(" 行\n");
-            sb.append("存储层最近一次写入：")
-              .append(LogStore.diagLastWriteAt == 0 ? "（本次进程还没写过）"
-                      : new java.util.Date(LogStore.diagLastWriteAt).toString()).append("\n");
-            sb.append("存储层最近写入的行（前 120 字）：")
-              .append(TextUtils.isEmpty(LogStore.diagLastLine)
-                      ? "（无）" : tail(LogStore.diagLastLine, 120)).append("\n");
-            sb.append("存储层最近一次错误：")
-              .append(TextUtils.isEmpty(LogStore.diagLastError)
-                      ? "（无）" : LogStore.diagLastError).append("\n");
-            sb.append("最近一次清空前的备份：")
-              .append(TextUtils.isEmpty(LogStore.diagLastBackupPath)
-                      ? "（本次进程还没清空过）" : LogStore.diagLastBackupPath).append("\n\n");
-
-            sb.append("── 哪些应用发过事件（次数）──\n");
-            java.util.List<Map.Entry<String, Integer>> es =
-                    new ArrayList<>(TypelogService.ALL_EVENT_PKGS.entrySet());
-            java.util.Collections.sort(es, (a, b) -> b.getValue() - a.getValue());
-            if (es.isEmpty()) {
-                sb.append("（一次都没收到）\n");
-            }
-            for (int i = 0; i < es.size() && i < 12; i++) {
-                Map.Entry<String, Integer> e = es.get(i);
-                Integer t = TypelogService.TEXT_EVENT_PKGS.get(e.getKey());
-                sb.append("· ").append(name(labels, e.getKey()))
-                  .append("  [").append(e.getKey()).append("]  总 ").append(e.getValue())
-                  .append(" 次，其中文本变化 ").append(t == null ? 0 : t).append(" 次\n");
-            }
-
-            Integer wx = TypelogService.ALL_EVENT_PKGS.get("com.tencent.mm");
-            sb.append("\n微信(com.tencent.mm)：");
-            if (wx == null) {
-                sb.append("一次事件都没收到 ← 系统层面没放行");
-            } else {
-                Integer wxt = TypelogService.TEXT_EVENT_PKGS.get("com.tencent.mm");
-                sb.append("收到 ").append(wx).append(" 次事件，其中文本变化 ")
-                  .append(wxt == null ? 0 : wxt).append(" 次");
-                if (wxt == null) {
-                    sb.append(" ← 微信不发文本变化事件，应走轮询兜底（确认轮询是开的）");
-                }
-            }
-
-            sb.append("\n\n── 最近一次扫描情况 ──\n")
-              .append(TextUtils.isEmpty(TypelogService.lastScanInfo)
-                      ? "（还没有扫描失败过）" : TypelogService.lastScanInfo).append("\n");
-
-            sb.append("\n── 磁盘上的原始文件（绕开所有缓存，最硬的证据）──\n");
-            for (String line : store.fileInventory(today, 60)) {
-                sb.append("· ").append(line).append("\n");
-            }
-
-            sb.append("\n── 最近 25 条原始事件（需在设置里开诊断日志）──\n");
-            java.util.List<String> diag = TypelogService.DIAG;
-            synchronized (diag) {
-                if (diag.isEmpty()) {
-                    sb.append("（诊断日志未开启）\n");
-                } else {
-                    int from = Math.max(0, diag.size() - 25);
-                    for (int i = from; i < diag.size(); i++) {
-                        sb.append("· ").append(diag.get(i)).append("\n");
-                    }
-                }
-            }
-
-            if (TypelogService.skippedNoFocus > 0 && TypelogService.evCaptured == 0) {
-                sb.append("\n⚠ 已跳过 ").append(TypelogService.skippedNoFocus)
-                  .append(" 个未聚焦的框，且一条都没记到。\n")
-                  .append("   焦点过滤可能对本机过严，到「设置」里关掉「只记当前焦点框」试试。\n");
-            }
-
-            sb.append("\n── 实时预览（最近一次输入）──\n");
-            if (TextUtils.isEmpty(TypelogService.lastTs)) {
-                sb.append("还没有捕获到输入。\n");
-            } else {
-                String app = TextUtils.isEmpty(TypelogService.lastAppLabel)
-                        ? TypelogService.lastApp : TypelogService.lastAppLabel;
-                sb.append("时间：").append(TypelogService.lastTs).append("\n");
-                sb.append("应用：").append(TextUtils.isEmpty(app) ? "（未知）" : app).append("\n");
-                sb.append("输入框：").append(TypelogService.lastField).append("\n");
-                sb.append("当前字数：").append(TypelogService.lastText.length()).append("\n");
-                sb.append("—— 最近一次内容 ——\n")
-                  .append(tail(TypelogService.lastText, 300)).append("\n");
-            }
-
-            sb.append("\n── 统计（今天）──\n");
-            sb.append("落盘版本数：").append(total).append("\n");
-            sb.append("其中未上屏状态：").append(compCount).append(" 条\n");
-            sb.append("占用空间：").append(bytes < 1024 ? bytes + " 字节" : (bytes / 1024) + " KB")
-              .append("\n");
-            if (!rows.isEmpty()) {
-                LogStore.Row last = rows.get(rows.size() - 1);
-                sb.append("最后一条：").append(last.ts.replace("T", " ").substring(0, 19))
-                  .append("　").append(last.app).append("　").append(last.chars).append(" 字\n")
-                  .append(tail(last.text, 120)).append("\n");
-            }
-            sb.append("保存位置：应用私有目录（其他 App 读不到）\n");
-
-            sb.append("\n── 今天记录过的 App ──\n");
-            if (counts.isEmpty()) {
-                sb.append("还没有记录。\n");
-            } else {
-                for (Map.Entry<String, Integer> e : counts.entrySet()) {
-                    sb.append("· ").append(name(labels, e.getKey()))
-                      .append("（").append(e.getKey()).append("）  ")
-                      .append(e.getValue()).append(" 条，最长 ")
-                      .append(chars.get(e.getKey())).append(" 字\n");
-                }
-            }
-
-            final String text = sb.toString().trim();
-            ui.post(() -> {
-                tv.setText(text);
-                new android.app.AlertDialog.Builder(this)
-                        .setTitle("诊断")
-                        .setView(sc)
-                        .setPositiveButton("关闭", null)
-                        .show();
-            });
-        }, "typelog-diag").start();
-    }
-
-
-
-
-
-            private static String tail(String s, int n) {
+                private static String tail(String s, int n) {
         if (s == null) {
             return "";
         }
@@ -1241,6 +964,404 @@ public class MainActivity extends Activity {
     private static String name(Map<String, String> labels, String app) {
         String n = labels == null ? null : labels.get(app);
         return (n == null || n.isEmpty()) ? app : n;
+    }
+
+    /** 第三页：四张状态卡片 + 设置 + 诊断。
+     *
+     * 这些内容原来挤在记录页顶部（要滚四屏才看到记录），后来收进弹窗，
+     * 但弹窗看不全、也不方便与设置对照，于是独立成一页。
+     */
+    private void buildToolsPage() {
+        toolsRoot.removeAllViews();
+
+        statusView = cardView("采集状态", "正在检测…");
+        toolsRoot.addView(statusView);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, dp(8), 0, dp(8));
+        Button btnOpen = button("去开启 / 检查服务");
+        btnOpen.setOnClickListener(v -> startActivity(
+                new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        row.addView(btnOpen);
+        Button btnRefresh = button("刷新");
+        btnRefresh.setOnClickListener(v -> refreshTools());
+        row.addView(btnRefresh);
+        toolsRoot.addView(row);
+
+        liveView = cardView("实时预览（最近一次输入）", "…");
+        toolsRoot.addView(liveView);
+        statsView = cardView("统计（今天）", "…");
+        toolsRoot.addView(statsView);
+        appsView = cardView("今天记录过的 App", "…");
+        toolsRoot.addView(appsView);
+
+        toolsRoot.addView(sectionTitle("设置"));
+        String[] items = settingItems();
+        for (int i = 0; i < items.length; i++) {
+            toolsRoot.addView(settingRow(items[i], i));
+        }
+
+        toolsRoot.addView(sectionTitle("诊断"));
+        TextView hint = new TextView(this);
+        hint.setTextColor(COL_DIM);
+        hint.setTextSize(11);
+        hint.setPadding(dp(2), 0, 0, dp(8));
+        hint.setText("排查问题用，内容较长，往下滚即可。");
+        toolsRoot.addView(hint);
+        diagView = cardView("事件与存储", "读取中…");
+        toolsRoot.addView(diagView);
+    }
+
+    private TextView sectionTitle(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(COL_FG);
+        t.setTextSize(15);
+        t.setTypeface(null, Typeface.BOLD);
+        t.setPadding(dp(4), dp(18), 0, dp(8));
+        return t;
+    }
+
+    /** 一行设置项：显示当前值，点击弹出对应选择 */
+    private View settingRow(String text, final int which) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(COL_FG);
+        t.setTextSize(13);
+        t.setBackground(rounded(COL_CARD, 12));
+        t.setPadding(dp(14), dp(14), dp(14), dp(14));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(8);
+        t.setLayoutParams(lp);
+        t.setClickable(true);
+        t.setOnClickListener(v -> {
+            applySetting(which);
+            refreshTools();
+        });
+        return t;
+    }
+
+    /** 卡片：加粗标题 + 正文 */
+    private TextView cardView(String title, String body) {
+        TextView t = new TextView(this);
+        t.setTextSize(13);
+        t.setTextColor(COL_FG);
+        t.setBackground(rounded(COL_CARD, 12));
+        t.setPadding(dp(14), dp(12), dp(14), dp(12));
+        t.setLineSpacing(dp(4), 1f);
+        t.setTextIsSelectable(true);
+        setCardText(t, title, body);
+        return t;
+    }
+
+    private void setCardText(TextView v, String title, String body) {
+        android.text.SpannableString ss = new android.text.SpannableString(title + "\n" + body);
+        ss.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), 0, title.length(),
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        v.setText(ss);
+    }
+
+    /** 刷新第三页：实时预览与状态是内存数据（快），统计与诊断要读盘（后台） */
+    private void refreshTools() {
+        if (statusView == null) {
+            return;
+        }
+        String app = TextUtils.isEmpty(TypelogService.lastAppLabel)
+                ? TypelogService.lastApp : TypelogService.lastAppLabel;
+        if (TextUtils.isEmpty(TypelogService.lastTs)) {
+            setCardText(liveView, "实时预览（最近一次输入）",
+                    "还没有捕获到输入。开启服务后，去任意 App 打几个字试试。");
+        } else {
+            setCardText(liveView, "实时预览（最近一次输入）",
+                    "时间：" + TypelogService.lastTs + "\n"
+                    + "应用：" + (TextUtils.isEmpty(app) ? "（未知）" : app) + "\n"
+                    + "输入框：" + TypelogService.lastField + "\n"
+                    + "当前字数：" + TypelogService.lastText.length() + "\n"
+                    + "—— 最近一次内容 ——\n" + tail(TypelogService.lastText, 200));
+        }
+        setCardText(statusView, "采集状态",
+                (isServiceEnabled() ? "● 已开启，正在记录" : "○ 未开启")
+                + "\n本次会话落盘 " + TypelogService.written + " 条（服务重启会归零，历史不会丢）"
+                + "\n收到事件 " + TypelogService.evAll
+                + "（文本变化 " + TypelogService.evText + "）"
+                + "\n取到文本 " + TypelogService.evCaptured
+                + "　兜底找回 " + TypelogService.evTraverseHit
+                + "　跳过密码框 " + TypelogService.skippedPassword);
+
+        new Thread(() -> {
+            LogStore store = new LogStore(getFilesDir(), 0);
+            String today = DAY.format(new Date());
+            Map<String, String> labels = store.labels(today);
+            java.util.List<LogStore.Row> rows = store.readDay(today, 0);
+            long bytes = store.totalBytes();
+
+            int total = 0;
+            int compCount = 0;
+            Map<String, Integer> counts = new LinkedHashMap<>();
+            Map<String, Integer> chars = new LinkedHashMap<>();
+            for (LogStore.Row r : rows) {
+                if (r.text.isEmpty()) {
+                    continue;
+                }
+                total++;
+                if (r.comp) {
+                    compCount++;
+                }
+                Integer c = counts.get(r.app);
+                counts.put(r.app, c == null ? 1 : c + 1);
+                Integer mx = chars.get(r.app);
+                chars.put(r.app, mx == null ? r.chars : Math.max(mx, r.chars));
+            }
+
+            StringBuilder st = new StringBuilder();
+            st.append("今天落盘版本数：").append(total).append("\n");
+            st.append("其中输入法未上屏：").append(compCount).append(" 条\n");
+            st.append("占用空间：")
+              .append(bytes < 1024 ? bytes + " 字节" : (bytes / 1024) + " KB").append("\n");
+            if (!rows.isEmpty()) {
+                LogStore.Row last = rows.get(rows.size() - 1);
+                st.append("最后一条（从磁盘读回）：\n")
+                  .append(last.ts.replace("T", " ").substring(0, 19)).append("\n")
+                  .append(tail(last.text, 120)).append("\n");
+            }
+            st.append("保存位置：应用私有目录（其他 App 读不到）");
+
+            StringBuilder ap = new StringBuilder();
+            if (counts.isEmpty()) {
+                ap.append("今天还没有记录。");
+            } else {
+                for (Map.Entry<String, Integer> e : counts.entrySet()) {
+                    ap.append("· ").append(name(labels, e.getKey()))
+                      .append("（").append(e.getKey()).append("）  ")
+                      .append(e.getValue()).append(" 条，最长 ")
+                      .append(chars.get(e.getKey())).append(" 字\n");
+                }
+            }
+
+            final String stFinal = st.toString();
+            final String apFinal = ap.toString().trim();
+            ui.post(() -> {
+                setCardText(statsView, "统计（今天）", stFinal);
+                setCardText(appsView, "今天记录过的 App", apFinal);
+            });
+        }, "typelog-tools").start();
+
+        new Thread(() -> {
+            final String d = diagText().toString();
+            ui.post(() -> {
+                if (diagView != null) {
+                    setCardText(diagView, "事件与存储", d);
+                }
+            });
+        }, "typelog-diag").start();
+    }
+
+    /**
+     * 诊断正文。集中在这里生成，页面与弹窗共用 ——
+     * 分两处写就一定会走样（本项目已经因此丢过一次内容）。
+     */
+    private StringBuilder diagText() {
+        LogStore store = new LogStore(getFilesDir(), 0);
+        String today = DAY.format(new Date());
+        Map<String, String> labels = store.labels(today);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("收到的无障碍事件总数：").append(TypelogService.evAll).append("\n");
+        sb.append("其中文本变化事件：").append(TypelogService.evText).append("\n");
+        sb.append("取到文本并进入记录：").append(TypelogService.evCaptured).append("\n");
+        sb.append("事件里节点为空(靠兜底找回)：").append(TypelogService.evSourceNull)
+          .append(" / 兜底成功 ").append(TypelogService.evTraverseHit).append("\n");
+        sb.append("宽松判据兜底命中：").append(TypelogService.evRelaxedHit).append("\n");
+        sb.append("节点不是输入框：").append(TypelogService.evNotEditable).append("\n");
+        sb.append("跳过系统UI/不可记录包：").append(TypelogService.skippedSelf).append("\n");
+        sb.append("跳过输入法键盘自身事件：").append(TypelogService.skippedIme).append("\n");
+        sb.append("跳过删除操作(按设置)：").append(TypelogService.skippedDelete).append("\n");
+        sb.append("跳过未聚焦的框：").append(TypelogService.skippedNoFocus).append("\n");
+        sb.append("跳过占位提示/单字碎片：").append(TypelogService.skippedNoise).append("\n");
+        sb.append("跳过(设置里排除的)：").append(TypelogService.skippedIgnored).append("\n");
+        sb.append("跳过(其它原因)：").append(TypelogService.skippedOther).append("\n");
+        sb.append("跳过密码框：").append(TypelogService.skippedPassword).append("\n");
+        sb.append("检测到点击「发送/搜索/发布」：").append(TypelogService.sendBoundaries)
+          .append(" 次（消息分段依据）\n");
+        sb.append("写入失败：").append(TypelogService.errors).append("\n");
+        sb.append("本次会话落盘：").append(TypelogService.written).append(" 条\n");
+        sb.append("最近一次错误的来源包：")
+          .append(TextUtils.isEmpty(TypelogService.lastSourcePkg) ? "（无）"
+                  : TypelogService.lastSourcePkg).append("\n");
+        sb.append("最近一次错误：")
+          .append(TextUtils.isEmpty(TypelogService.lastError) ? "（无）"
+                  : TypelogService.lastError).append("\n");
+        sb.append("存储层：写入成功 ").append(LogStore.diagWrittenRows)
+          .append(" 行，累计 ").append(LogStore.diagByteCount).append(" 字节")
+          .append("，跳过 ").append(LogStore.diagSkippedRows).append(" 行\n");
+        sb.append("存储层最近一次写入：")
+          .append(LogStore.diagLastWriteAt == 0 ? "（本次进程还没写过）"
+                  : new Date(LogStore.diagLastWriteAt).toString()).append("\n");
+        sb.append("存储层最近写入的行（前 120 字）：")
+          .append(TextUtils.isEmpty(LogStore.diagLastLine) ? "（无）"
+                  : tail(LogStore.diagLastLine, 120)).append("\n");
+        sb.append("存储层最近一次错误：")
+          .append(TextUtils.isEmpty(LogStore.diagLastError) ? "（无）"
+                  : LogStore.diagLastError).append("\n");
+        sb.append("最近一次清空前的备份：")
+          .append(TextUtils.isEmpty(LogStore.diagLastBackupPath) ? "（本次进程还没清空过）"
+                  : LogStore.diagLastBackupPath).append("\n");
+
+        sb.append("\n哪些应用发过事件（次数）：\n");
+        java.util.List<Map.Entry<String, Integer>> es =
+                new ArrayList<>(TypelogService.ALL_EVENT_PKGS.entrySet());
+        java.util.Collections.sort(es, (a, b) -> b.getValue() - a.getValue());
+        if (es.isEmpty()) {
+            sb.append("（一次都没收到）\n");
+        }
+        for (int i = 0; i < es.size() && i < 12; i++) {
+            Map.Entry<String, Integer> e = es.get(i);
+            Integer t = TypelogService.TEXT_EVENT_PKGS.get(e.getKey());
+            sb.append("· ").append(name(labels, e.getKey()))
+              .append("  [").append(e.getKey()).append("]  总 ").append(e.getValue())
+              .append(" 次，其中文本变化 ").append(t == null ? 0 : t).append(" 次\n");
+        }
+
+        Integer wx = TypelogService.ALL_EVENT_PKGS.get("com.tencent.mm");
+        sb.append("\n微信(com.tencent.mm)：");
+        if (wx == null) {
+            sb.append("一次事件都没收到 ← 系统层面没放行");
+        } else {
+            Integer wxt = TypelogService.TEXT_EVENT_PKGS.get("com.tencent.mm");
+            sb.append("收到 ").append(wx).append(" 次事件，其中文本变化 ")
+              .append(wxt == null ? 0 : wxt).append(" 次");
+        }
+
+        sb.append("\n\n最近一次扫描情况：\n")
+          .append(TextUtils.isEmpty(TypelogService.lastScanInfo) ? "（还没有扫描失败过）"
+                  : TypelogService.lastScanInfo).append("\n");
+
+        sb.append("\n磁盘上的原始文件（绕开所有缓存，最硬的证据）：\n");
+        for (String line : store.fileInventory(today, 40)) {
+            sb.append("· ").append(line).append("\n");
+        }
+
+        sb.append("\n最近 25 条原始事件（需在设置里开诊断日志）：\n");
+        java.util.List<String> diag = TypelogService.DIAG;
+        synchronized (diag) {
+            if (diag.isEmpty()) {
+                sb.append("（诊断日志未开启）\n");
+            } else {
+                int from = Math.max(0, diag.size() - 25);
+                for (int i = from; i < diag.size(); i++) {
+                    sb.append("· ").append(diag.get(i)).append("\n");
+                }
+            }
+        }
+
+        if (TypelogService.skippedNoFocus > 0 && TypelogService.evCaptured == 0) {
+            sb.append("\n⚠ 已跳过 ").append(TypelogService.skippedNoFocus)
+              .append(" 个未聚焦的框，且一条都没记到。\n")
+              .append("   焦点过滤可能对本机过严，把「只记录有焦点的输入框」关掉试试。\n");
+        }
+        return sb;
+    }
+
+    /** 设置项文案：页面与设置弹窗共用一份，避免两处不一致 */
+    private String[] settingItems() {
+        return new String[]{
+                "后台保活：" + (Prefs.keepAlive(this) ? "开启（通知栏常驻）" : "关闭"),
+                "只记录有焦点的输入框：" + (Prefs.focusOnly(this) ? "开启" : "关闭"),
+                "忽略删除操作：" + (Prefs.ignoreDeletions(this)
+                        ? "开启（删字不新建记录）" : "关闭（删除也记录）"),
+                "排除输入法键盘事件：" + (Prefs.skipIme(this) ? "开启" : "关闭"),
+                "最少记录字数（当前 " + Prefs.minChars(this) + " 字）",
+                "保留天数（当前 " + Prefs.retentionDays(this) + " 天）",
+                "轮询兜底：" + (Prefs.polling(this) ? "开启" : "关闭"),
+                "诊断日志：" + (Prefs.debug(this) ? "开启" : "关闭"),
+                "记录文本被清空：" + (Prefs.keepEmpty(this) ? "记录" : "不记录"),
+                "不记录的 App…",
+                "显示保存位置",
+        };
+    }
+
+    /** 应用某一项设置（页面与设置弹窗共用） */
+    private void applySetting(int which) {
+        switch (which) {
+            case 0:
+                boolean kaOn = !Prefs.keepAlive(this);
+                Prefs.setKeepAlive(this, kaOn);
+                if (kaOn) {
+                    KeepAliveService.start(this);
+                } else {
+                    KeepAliveService.stop(this);
+                }
+                toast(kaOn ? "已开启保活：通知栏会出现一条常驻通知，进程不易被系统回收"
+                           : "已关闭保活：内存紧张时系统可能中断记录");
+                break;
+            case 1:
+                Prefs.setFocusOnly(this, !Prefs.focusOnly(this));
+                toast(Prefs.focusOnly(this) ? "只记正在输入的框（推荐）"
+                                            : "所有可编辑框都会被记录");
+                break;
+            case 2:
+                Prefs.setIgnoreDeletions(this, !Prefs.ignoreDeletions(this));
+                toast(Prefs.ignoreDeletions(this) ? "删字不再新建记录" : "删除也会被记录");
+                break;
+            case 3:
+                Prefs.setSkipIme(this, !Prefs.skipIme(this));
+                toast("已" + (Prefs.skipIme(this) ? "排除" : "包含") + "输入法键盘事件");
+                break;
+            case 4:
+                chooseMinChars();
+                break;
+            case 5:
+                chooseRetention();
+                break;
+            case 6:
+                Prefs.setPolling(this, !Prefs.polling(this));
+                toast("轮询兜底已" + (Prefs.polling(this) ? "开启" : "关闭") + "（下次生效）");
+                break;
+            case 7:
+                Prefs.setDebug(this, !Prefs.debug(this));
+                if (Prefs.debug(this)) {
+                    TypelogService.DIAG.clear();
+                }
+                toast("诊断日志已" + (Prefs.debug(this) ? "开启" : "关闭"));
+                break;
+            case 8:
+                Prefs.setKeepEmpty(this, !Prefs.keepEmpty(this));
+                toast("已" + (Prefs.keepEmpty(this) ? "记录" : "忽略") + "清空事件");
+                break;
+            case 9:
+                chooseIgnored();
+                break;
+            default:
+                toast("应用私有目录：/data/data/" + getPackageName() + "/files/logs/");
+                break;
+        }
+    }
+
+    /** 「更多」：导出、分享、清空，以及跳到「工具」页 */
+    private void showMore() {
+        final String[] items = {
+                "导出到下载目录", "分享 zip", "设置与诊断（去「工具」页）", "清除全部记录",
+        };
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("更多")
+                .setItems(items, (d, which) -> {
+                    switch (which) {
+                        case 0:
+                            doExportToDownloads();
+                            break;
+                        case 1:
+                            doExport();
+                            break;
+                        case 2:
+                            switchPage(2);
+                            break;
+                        default:
+                            confirmClearAll();
+                            break;
+                    }
+                })
+                .show();
     }
     private void doExportToDownloads() {
         toast("正在导出到「下载/DraftGuard」…");

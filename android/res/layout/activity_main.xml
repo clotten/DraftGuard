@@ -75,6 +75,31 @@
                 android:layout_height="2dp"
                 android:background="#1A1D26" />
         </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/tabTools"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/navToolsText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:paddingTop="14dp"
+                android:paddingBottom="12dp"
+                android:text="工具"
+                android:textColor="#8B95A7"
+                android:textSize="15sp" />
+
+            <View
+                android:id="@+id/navToolsBar"
+                android:layout_width="match_parent"
+                android:layout_height="2dp"
+                android:background="#1A1D26" />
+        </LinearLayout>
     </LinearLayout>
 
     <FrameLayout
@@ -99,6 +124,22 @@
 
             <LinearLayout
                 android:id="@+id/appsRoot"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp" />
+        </ScrollView>
+
+        <!-- 页面 3：工具（状态卡片 + 设置 + 诊断） -->
+        <ScrollView
+            android:id="@+id/page3"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/toolsRoot"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"

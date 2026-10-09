@@ -51,6 +51,12 @@ def delete_method(text: str, header: str) -> str:
     return text[:a] + text[b:]
 
 
+def insert_after(text: str, header: str, code: str) -> str:
+    """在某个方法之后插入一段代码。"""
+    _, b = find_method(text, header)
+    return text[:b] + "\n\n    " + code.rstrip() + text[b:]
+
+
 def patch(path: Path, ops) -> None:
     src = path.read_text(encoding="utf-8")
     for kind, header, new_code in ops:

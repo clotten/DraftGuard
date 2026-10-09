@@ -44,14 +44,13 @@ def collect(path: Path) -> list[str]:
     return names
 
 
-def diag_region(src: str) -> str:
-    """取出 showDiag() 方法体（诊断面板的内容就在这里）。"""
-    i = src.find("private void showDiag() {")
+def method_body(src: str, header: str) -> str:
+    """取出某个方法的完整代码（按花括号配对）。"""
+    i = src.find(header)
     if i < 0:
-        raise SystemExit("找不到 showDiag()")
+        raise SystemExit(f"找不到 {header}（若改名了，请同步更新本检查）")
     depth = 0
-    j = src.find("{", i)
-    k = j
+    k = src.find("{", i)
     while k < len(src):
         if src[k] == '{':
             depth += 1
@@ -60,7 +59,20 @@ def diag_region(src: str) -> str:
             if depth == 0:
                 return src[i:k + 1]
         k += 1
-    raise SystemExit("showDiag 花括号不配对")
+    raise SystemExit(f"{header} 花括号不配对")
+
+
+def diag_region(src: str) -> str:
+    """诊断内容的可见范围 = 「工具」页上的两处：
+
+      · refreshTools()  四张状态卡片（采集状态 / 实时预览 / 统计 / 应用列表）
+      · diagText()      诊断正文（页面与弹窗共用同一份）
+
+    以前只看 showDiag()；重构后内容分到了这两处，检查范围必须跟着走，
+    否则会出现"字段明明显示着、检查却说缺失"的假报警。
+    """
+    return (method_body(src, "private void refreshTools() {")
+            + "\n" + method_body(src, "private StringBuilder diagText() {"))
 
 
 def main() -> int:
