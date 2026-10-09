@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 GAP_MS = 5 * 60 * 1000
+LONG_GAP_MS = 6 * 60 * 60 * 1000
 KEEP_RATIO = 0.5
 MIN_LEN_FOR_REWRITE = 4
 MIN_COMMON_PREFIX = 2
@@ -53,7 +54,10 @@ def is_full_rewrite(a: str, b: str) -> bool:
 def mergeable(cur: dict, nxt: dict) -> bool:
     if cur["app"] != nxt["app"] or cur["field"] != nxt["field"]:
         return False
-    if ms_of(nxt["ts"]) - ms_of(cur["ts"]) > GAP_MS:
+    gap = ms_of(nxt["ts"]) - ms_of(cur["ts"])
+    # 接着写未完成草稿：允许很长的间隔（与 Burst.java 保持一致）
+    continuing = bool(cur["text"]) and nxt["text"].startswith(cur["text"])
+    if gap > (LONG_GAP_MS if continuing else GAP_MS):
         return False
     a, b = cur["text"], nxt["text"]
     if not a and not b:

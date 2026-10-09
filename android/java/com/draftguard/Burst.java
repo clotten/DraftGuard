@@ -30,6 +30,17 @@ final class Burst {
     static final long GAP_MS = 5 * 60 * 1000L;
 
     /**
+     * "接着写未完成草稿"允许的最大间隔，比 GAP_MS 宽得多。
+     *
+     * 场景（用户反馈）：打完一段话 → 切出去办事 → 几分钟甚至几小时回来在后面继续打。
+     * 那仍是同一段话 —— 没发送就切走的内容是**草稿**，不是已经发出的消息。
+     *
+     * "已发出又发了相似的一条"由"发送"信号排除：真发出去过，输入框会被清空，
+     * 不会出现"新文本以旧文本开头"这种形态。
+     */
+    static final long LONG_GAP_MS = 6 * 60 * 60 * 1000L;
+
+    /**
      * 共同开头占较短那一版的比例低于它，就认为是"换了一段话"。
      * 用比例而不是绝对长度差：<一二三四五六七八九十> → <完全不同的另一句话来了>
      * 长度只差 1，但共同开头只有 1 个字，明显是重写。
@@ -148,7 +159,19 @@ final class Burst {
         if (!cur.app.equals(next.app) || !cur.field.equals(next.field)) {
             return false;
         }
-        if (msOf(next.firstTs) - msOf(cur.lastTs) > GAP_MS) {
+        // 间隔判据分两种情况 —— 这是用户反馈"切出去几分钟回来接着打就断成两段"后的修正。
+        //
+        // 关键区别：**没发送就切走的内容不是"消息"，而是"未完成的草稿"**。
+        //   · 后面接着写（新文本以旧文本开头）⇒ 补全同一段草稿，允许跨很长时间（默认 6 小时）
+        //   · 完全换了内容 ⇒ 才按 GAP_MS 判断是不是另起一段
+        //
+        // 为什么"接着写"可以放宽：如果第一段真的发出去过，输入框会被清空，
+        // 也就不会出现"新文本以旧文本开头"这种形态 —— 这一点由"发送"信号保证。
+        long gap = msOf(next.firstTs) - msOf(cur.lastTs);
+        String pa = cur.text == null ? "" : cur.text;
+        String pb = next.text == null ? "" : next.text;
+        boolean continuingDraft = !pa.isEmpty() && pb.startsWith(pa);
+        if (gap > (continuingDraft ? LONG_GAP_MS : GAP_MS)) {
             return false;
         }
         // 首要判据：两次文本之间用户是否点过"发送"。
@@ -195,7 +218,6 @@ final class Burst {
         // 判据：间隔很短 + 两边都是短内容 ⇒ 是在改一个词，不是发了新消息。
         // 聊天里连发两条短消息的间隔通常更长（要按发送、再打字），
         // 而且**两条完全不同的话不会在几秒内要求用户重打一遍**。
-        long gap = msOf(next.firstTs) - msOf(cur.lastTs);
         if (gap > RAPID_EDIT_MS || a.length() > RAPID_EDIT_MAX || b.length() > RAPID_EDIT_MAX) {
             return false;
         }

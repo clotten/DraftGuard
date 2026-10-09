@@ -22,6 +22,19 @@ public class BurstTest {
     }
 
     /** 造一条记录，ts 用"分钟偏移"表示，方便控制时间间隔 */
+    /** 把 ISO 时间戳整体平移指定毫秒（用于构造"几小时后"的记录） */
+    static String shift(String iso, long deltaMs) {
+        try {
+            String pat = "yyyy-MM-dd'T'HH:mm:ss.SSS";
+            java.text.SimpleDateFormat f =
+                    new java.text.SimpleDateFormat(pat, java.util.Locale.US);
+            java.util.Date d = f.parse(iso);
+            return f.format(new java.util.Date(d.getTime() + deltaMs));
+        } catch (Exception e) {
+            return iso;
+        }
+    }
+
     static LogStore.Row row(String app, String field, String text, int minutesAgo) {
         LogStore.Row r = new LogStore.Row();
         long ms = 1_700_000_000_000L - minutesAgo * 60_000L;
@@ -176,7 +189,29 @@ public class BurstTest {
         check("短句微调不算整段重写", !Burst.isFullRewrite("你好呀我", "你好呀我很"), "误判为重写");
         check("换句子算整段重写", Burst.isFullRewrite("第一句话在这里哦", "完全不同的另一段内容"), "未识别");
 
+        System.out.println("\n== 14. 切出去很久回来接着写草稿（应合并）==");
+        SendBoundary.resetForTest();   // 见第 12 项说明：必须先清掉全局发送状态
+        List<LogStore.Row> b14 = new ArrayList<LogStore.Row>();
+        LogStore.Row first14 = row(APP, F, "今天我去超市买了", 0);
+        b14.add(first14);
+        // 第二条 = 第一条时间 + 3 小时（按第一条实际时间戳推算，避免基准不一致）
+        LogStore.Row late = row(APP, F, "今天我去超市买了鸡蛋和牛奶", 0);
+        late.ts = shift(first14.ts, 3 * 60 * 60 * 1000L);
+        late.minute = late.ts.substring(11, 16);
+        b14.add(late);
+        check("间隔 3 小时的续写合并为 1 段", Burst.group(b14).size() == 1, dump(Burst.group(b14)));
+
+        List<LogStore.Row> b14b = new ArrayList<LogStore.Row>();
+        LogStore.Row first14b = row(APP, F, "今天我去超市买了", 0);
+        b14b.add(first14b);
+        LogStore.Row other = row(APP, F, "完全不一样的另一句话在这里", 0);
+        other.ts = shift(first14b.ts, 3 * 60 * 60 * 1000L);   // 3 小时后，且非续写
+        other.minute = other.ts.substring(11, 16);
+        b14b.add(other);
+        check("间隔 3 小时的非续写分段", Burst.group(b14b).size() == 2, dump(Burst.group(b14b)));
+
         System.out.println("\n== 13. 整词打错重打（共同开头为 0，仍应合并）==");
+        SendBoundary.resetForTest();
         List<Burst> b13 = Burst.group(streamSec(APP, F, 0, "来发展", "开发者"));
         check("短间隔+短内容：合并为 1 段", b13.size() == 1, dump(b13));
         check("取改对后的内容", b13.size() == 1 && "开发者".equals(b13.get(0).text),
@@ -188,6 +223,9 @@ public class BurstTest {
         check("长内容无共同开头：分段", b13c.size() == 2, dump(b13c));
 
         System.out.println("\n== 12. 点了发送 ⇒ 必须分段（最可靠的判据）==");
+        // 注意：SendBoundary 是全局状态，且记录的是**真实当前时间**，
+        // 而测试用的时间戳是固定的过去时间 —— 若不重置，
+        // 后面的用例会因为"当前时刻晚于测试记录时刻"而全部被判为"已发送"。
         SendBoundary.resetForTest();
         List<LogStore.Row> rows12 = new ArrayList<LogStore.Row>();
         LogStore.Row r1 = row(APP, F, "你好呀", 1);
