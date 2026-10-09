@@ -86,10 +86,23 @@ final class Burst {
     boolean comp;
 
     static List<Burst> group(List<LogStore.Row> rows) {
+        // 先把"提交"记录（ev=send，发送/搜索/发布）单独拎出来。
+        // 它们是**分段边界**，本身不是内容。
+        //
+        // 为什么必须从数据里来：早先只把发送时间记在内存静态字段里，
+        // 用"这条之后有没有发送过"判断，而那个时间是"现在"，
+        // 于是所有历史记录都被判成"发送之后"，导致 QQ 里 1039 个版本一段都没合并。
+        // 落盘后，判据变成"两条文本之间是否夹着一条发送记录"，与当前时间无关。
+        final List<Long> sendTs = new ArrayList<>();
         List<Burst> raw = new ArrayList<>();
         for (LogStore.Row r : rows) {
+            if ("send".equals(r.ev)) {
+                sendTs.add(msOf(r.ts));
+                continue;
+            }
             raw.add(fromRow(r));
         }
+        Collections.sort(sendTs);
         // 排序键必须是「应用 + 输入框 + 时间」，不能只按时间。
         //
         // 踩过的坑（用户实录）：在豆包里打一段话 → 中途切去拼多多搜了一下 →
@@ -118,7 +131,7 @@ final class Burst {
         List<Burst> out = new ArrayList<>();
         Burst cur = null;
         for (Burst b : raw) {
-            if (cur != null && mergeable(cur, b)) {
+            if (cur != null && mergeable(cur, b, sendTs)) {
                 if (isMidEdit(cur.text, b.text)) {
                     cur.edits++;       // 从中间改动，记下来（界面可说明"含 N 次修改"）
                 }
@@ -211,8 +224,23 @@ final class Burst {
     }
 
     private static boolean mergeable(Burst cur, Burst next) {
+        return mergeable(cur, next, null);
+    }
+
+    private static boolean mergeable(Burst cur, Burst next, List<Long> sends) {
         if (!cur.app.equals(next.app)) {
             return false;
+        }
+        // 两条文本之间夹着一次"提交" ⇒ 必定分段（这是真信号，不是猜的）
+        if (sends != null) {
+            long from = msOf(cur.lastTs);
+            long to = msOf(next.firstTs);
+            for (int i = 0; i < sends.size(); i++) {
+                long t = sends.get(i);
+                if (t > from && t <= to) {
+                    return false;
+                }
+            }
         }
         // 输入框标识：空表示"旧记录没存这个字段"，与任何标识都视为同一输入框。
         // 否则加入 field 存盘后，会与改造前的历史记录无法合并。
@@ -234,12 +262,6 @@ final class Burst {
         if (gap > (continuingDraft ? LONG_GAP_MS : GAP_MS)) {
             return false;
         }
-        // 首要判据：两次文本之间用户是否点过"发送"。
-        // 点过 ⇒ 上一条消息结束，必定分段（这是真信号，不是猜的）。
-        if (SendBoundary.sendAfter(cur.lastTs)) {
-            return false;
-        }
-
         String a = cur.text == null ? "" : cur.text;
         String b = next.text == null ? "" : next.text;
 

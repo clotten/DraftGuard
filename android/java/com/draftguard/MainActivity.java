@@ -1092,8 +1092,12 @@ public class MainActivity extends Activity {
                 sb.append("【逐条视图】共 ").append(rows.size()).append(" 条原始版本（新→旧）\n")
                   .append("这是每次文本变化都存一版的真相，用于排查；看内容请切回合并视图。\n\n");
                 int shown = 0;
-                for (int i = rows.size() - 1; i >= 0 && shown < 300; i--, shown++) {
+                for (int i = rows.size() - 1; i >= 0 && shown < 300; i--) {
                     LogStore.Row r = rows.get(i);
+                    if ("send".equals(r.ev) || r.text.isEmpty()) {
+                        continue;   // 发送标记与空文本不是内容
+                    }
+                    shown++;
                     sb.append(r.ts, 11, 19).append("  ").append(name(labels, r.app))
                       .append("  ").append(r.chars).append(" 字")
                       .append(r.comp ? "（未上屏）" : "").append("\n")

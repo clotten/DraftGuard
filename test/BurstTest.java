@@ -250,10 +250,24 @@ public class BurstTest {
         rows12.add(r2);
         // 无发送信号时：共同开头很长 → 合并为一段
         check("无发送信号时相似内容合并", Burst.group(rows12).size() == 1, dump(Burst.group(rows12)));
-        // 伪造"在 r1 之后点了发送" → 必须分段
-        SendBoundary.markForTest(Burst.msOf(r1.ts) + 1, APP);
-        List<Burst> seg = Burst.group(rows12);
-        check("有发送信号时必须分段", seg.size() == 2, dump(seg));
+        // 插入一条"发送"记录（夹在两条文本之间）→ 必须分段。
+        // 注意：判据来自**落盘的发送记录**，不是内存里的时间戳 ——
+        // 后者用"现在"去比历史记录，会把所有历史都判成"已发送"。
+        List<LogStore.Row> rows12b = new ArrayList<LogStore.Row>();
+        rows12b.add(r1);
+        LogStore.Row send = new LogStore.Row();
+        send.app = APP;
+        send.field = F;
+        send.text = "";
+        send.ev = "send";
+        send.ts = shift(r1.ts, 500);
+        send.minute = send.ts.substring(11, 16);
+        rows12b.add(send);
+        rows12b.add(r2);
+        List<Burst> seg = Burst.group(rows12b);
+        check("两条文本间夹着发送记录 ⇒ 分段", seg.size() == 2, dump(seg));
+        check("发送记录本身不产生段", seg.size() == 2
+                        && "你好呀".equals(seg.get(0).text), dump(seg));
         SendBoundary.resetForTest();
 
         System.out.println("\n== 11. 占位文字识别（小米笔记那条默认文本）==");

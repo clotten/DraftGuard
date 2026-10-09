@@ -568,6 +568,7 @@ public class TypelogService extends AccessibilityService {
         }
         final boolean comp = focusedNode != null && isComposing(focusedNode, text);
         final String field = focusedNode != null ? fieldKey(focusedNode, pkg) : (pkg + "#@event");
+        lastFieldKey = field;
 
         // 一个字节都读不到时，宁愿这一版漏掉，也不能把已有内容覆盖成空
         if (text.isEmpty()) {
@@ -671,6 +672,8 @@ public class TypelogService extends AccessibilityService {
     private long lastUiAt;
     /** 最近一次"发送"点击时间（防抖：一次点击可能触发多个事件） */
     private long lastSendAt;
+    /** 最近一次记录用的输入框标识（发送标记要带上它，才能归到同一输入框） */
+    private String lastFieldKey = "";
     /** 检测到的"发送"点击次数（消息边界信号，仅用于诊断显示） */
     public static volatile long sendBoundaries;
     /** 诊断环形缓冲：把原始事件记下来，导出日志时能看到"系统到底给了什么" */
@@ -917,10 +920,44 @@ public class TypelogService extends AccessibilityService {
         }
         return low.contains("send") || low.equals("search") || low.contains("submit");
     }
-    /** 记录一次"发送"边界；下一条文本事件将另起一段 */
+    /**
+     * 记录一次"提交"边界（发送 / 搜索 / 发布）。
+     *
+     * 关键：**必须落盘**，不能只放在内存里。
+     *
+     * 踩过的坑：原先只把发送时间记在内存的静态字段里，分段时用
+     * "这个时间点之后有没有发送过" 来判断。但那个时间戳是"现在"，
+     * 于是**所有比它更早的历史记录都被判成"发送之后"** ——
+     * 表现是 QQ 里 1039 个版本合并出 1039 段，一段都没合上。
+     *
+     * 落盘成一条 ev="send" 的记录后，分段只要看"两条文本之间是否夹着一条发送记录"，
+     * 结果与时间无关、可复现，导出后离线分析也能得到同样结论。
+     */
     private void markSendBoundary(String pkg) {
-        SendBoundary.mark(pkg);      // 写入纯类，供 Burst 判段（避免 Burst 依赖 Android 服务）
+        long now = System.currentTimeMillis();
+        SendBoundary.mark(pkg);      // 仍记内存一份，供界面实时提示
         sendBoundaries++;
+        try {
+            if (store != null && pkg != null && !pkg.isEmpty()
+                    && !LogStore.isSkippedPackage(pkg)) {
+                Record r = new Record();
+                Date d = new Date(now);
+                r.ts = TS.format(d);
+                r.ms = now;
+                r.day = DAY.format(d);
+                r.minute = TS.format(d).substring(11, 16);
+                r.app = pkg;
+                r.appLabel = label(pkg);
+                r.field = lastFieldKey == null ? "" : lastFieldKey;
+                r.text = "";                 // 发送本身没有文本，只作分段标记
+                r.ev = "send";
+                r.delta = 0;
+                r.comp = false;
+                store.append(r);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "发送标记落盘失败", t);
+        }
         Log.i(TAG, "检测到发送：pkg=" + pkg + " 累计=" + sendBoundaries);
     }
 

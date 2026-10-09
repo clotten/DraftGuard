@@ -51,6 +51,7 @@ final class LogStore {
     private static final Pattern APP = Pattern.compile("\"app\":\"([^\"]*)\"");
     private static final Pattern FIELD = Pattern.compile("\"field\":\"([^\"]*)\"");
     private static final Pattern COMP = Pattern.compile("\"comp\":(true|false)");
+    private static final Pattern EV = Pattern.compile("\"ev\":\"([^\"]*)\"");
     private static final Pattern TEXT = Pattern.compile("\"text\":\"((?:[^\"\\\\]|\\\\.)*)\"");
 
     private final File root;
@@ -243,6 +244,8 @@ final class LogStore {
         String text = "";
         boolean comp;
         int chars;
+        /** 事件类型："text"（普通输入）或 "send"（用户点了发送/搜索/发布） */
+        String ev = "text";
 
         String key() {
             return minute + "|" + field + "|" + text;
@@ -324,10 +327,15 @@ final class LogStore {
                         new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = br.readLine()) != null) {
-                        if (!line.isEmpty()) {
-                            cnt++;
-                            last = line;
+                        if (line.isEmpty()) {
+                            continue;
                         }
+                        // "发送"标记不是内容，不计入条数
+                        if (line.contains("\"ev\":\"send\"")) {
+                            continue;
+                        }
+                        cnt++;
+                        last = line;
                     }
                 } catch (Exception ignored) {
                 }
@@ -411,6 +419,8 @@ final class LogStore {
                 r.app = f.getName().replace(".jsonl", "");
                 r.field = group(FIELD, line);
                 r.comp = "true".equals(group(COMP, line));
+                String ev = group(EV, line);
+                r.ev = ev == null || ev.isEmpty() ? "text" : ev;
                 r.text = text;
                 r.chars = text.length();
                 r.minute = r.ts.length() >= 16 ? r.ts.substring(11, 16) : "";

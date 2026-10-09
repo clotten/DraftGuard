@@ -89,9 +89,14 @@ def is_localized_edit(a: str, b: str) -> bool:
     return bool(ra) and bool(rb) and (ra.startswith(rb) or rb.startswith(ra))
 
 
-def mergeable(cur: dict, nxt: dict) -> bool:
+def mergeable(cur: dict, nxt: dict, sends: list | None = None) -> bool:
     if cur["app"] != nxt["app"]:
         return False
+    # 两条文本之间夹着一次"提交"（发送/搜索/发布）⇒ 必定分段
+    if sends:
+        frm, to = ms_of(cur["ts"]), ms_of(nxt["ts"])
+        if any(frm < t <= to for t in sends):
+            return False
     # 空 field = 改造前的旧记录，视为与任何标识同框
     if cur["field"] and nxt["field"] and cur["field"] != nxt["field"]:
         return False
@@ -164,8 +169,11 @@ def group(rows: list[dict]) -> list[dict]:
     # 那条记录会插进同一段话的两条之间，把一段话拆成两段。
     rows = sorted(rows, key=lambda r: (r["app"], r["field"], r.get("ms") or ms_of(r.get("ts", ""))))
     out: list[dict] = []
+    sends = sorted(ms_of(r["ts"]) for r in rows if r.get("ev") == "send")
     for r in rows:
-        if out and mergeable(out[-1], r):
+        if r.get("ev") == "send":
+            continue                      # 发送标记只作边界，不是内容
+        if out and mergeable(out[-1], r, sends):
             out[-1]["text"] = r["text"]
             out[-1]["ts_end"] = r["ts"]
             out[-1]["versions"] += 1
