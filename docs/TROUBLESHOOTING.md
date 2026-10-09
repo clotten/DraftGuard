@@ -293,3 +293,64 @@ sentence" from "submit, then type a similar new one" — the two are identical i
 **Practical stance:** the fallback is good enough for reading and recovering drafts, which is the
 app's purpose. Perfect message-level segmentation on every UI toolkit is a much larger problem
 than draft preservation, and should not be traded against it.
+---
+
+## 9. "Same opening but not merged" — two traps behind one symptom
+
+User report: two entries in Doubao started with identical text but were shown as two segments.
+
+### Trap 1 — the accessibility service was silently running stale code
+
+`adb install -r` replaces the APK, but a bound `AccessibilityService` **keeps running the old
+dex**. It is not an Activity, so it is not restarted on update, and it is not started again
+automatically. The result is the worst possible situation for debugging: *the APK on disk is
+new, the process is old, and nothing says so.*
+
+Observed sequence: a rule added and built into v2.15.1 appeared to have no effect at all, three
+times in a row, with correct code.
+
+**Fix / procedure:** after every install that changes capture or segmentation logic, restart the
+service explicitly and confirm it bound:
+
+```bash
+adb shell settings put secure enabled_accessibility_services com.draftguard/com.draftguard.TypelogService
+adb shell settings put secure accessibility_enabled 1
+adb shell dumpsys accessibility | grep 'Bound services'
+```
+
+### Trap 2 — `am force-stop` also kills the accessibility service
+
+Using `am force-stop` to "restart the app" **disables the service**, and it does not come back on
+its own. The app then records nothing at all, which looks exactly like a capture bug.
+
+**Fix:** never use `force-stop` on this app while the service matters; relaunch the activity, or
+re-enable via the settings command above, then verify the counter
+(`events: all=… text=…`) is moving.
+
+### Trap 3 — the field key was never persisted
+
+Segmentation groups records by "which input field", but that key was **recomputed at render time
+and never stored**. Exported data had no `field` at all, so offline analysis (which treated all
+records as one field) merged more aggressively than the app and disagreed with it — the
+disagreement itself was the clue.
+
+**Fix:** write `field` into every record and segment on the stored value. Records from before the
+change have no `field`; an empty value is treated as "same field as anything", so old data still
+merges with itself.
+
+Verification: with the fix, a 2-minute pause mid-message produced **54 versions → 1 segment**, and
+phone-side segmentation matched offline analysis (190 vs 191 segments on a 1014-version day,
+previously materially different).
+
+### Trap 4 — version numbers never reached the APK
+
+`aapt2` in build-tools 36.1.0 **silently ignores** `--version-code` / `--version-name`: the output
+is byte-for-byte the manifest's hardcoded values (confirmed by linking with and without the flags).
+Every build therefore shipped `versionCode=1, versionName=2.0.0`, so the package manager saw "no
+change" on upgrade and the installed version could not be identified from `dumpsys`.
+
+**Fix:** substitute the version into the manifest before linking, then **assert the built APK
+reports the expected version** and fail the build otherwise.
+
+**Lesson:** a flag that is silently ignored is worse than one that errors. Any property you depend
+on for correctness needs a post-build assertion.
