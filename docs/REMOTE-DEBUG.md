@@ -216,3 +216,21 @@ off and on again".
 launch), and "enabled but not connected", and only raises the blocking dialog 22 s after launch —
 so a service that is merely slow to rebind does not trigger a false alarm, while a genuinely dead
 one is reported on the status card immediately.
+
+---
+
+**What actually causes it — measured, correcting an earlier claim in this file:**
+
+| action | `accessibility_enabled` | entry in enabled list | service bound |
+|---|---|---|---|
+| baseline (healthy) | 1 | present | yes |
+| `adb install -r` (same or new build) | 1 | present | **yes — stays bound** |
+| `adb shell am force-stop <pkg>` | **0** | **removed** | no |
+
+A plain **update does not disturb accessibility** — and the package-update event actually makes the
+system re-bind the service. It is **`am force-stop` that wipes it**: Android's force-stop disables
+the package's accessibility services and *deletes the entry from the enabled list*. Launching the
+app afterwards does not restore it; the service must be re-enabled by hand.
+
+**Practical rule: never `force-stop` this app.** `adb install -r` already kills and restarts the
+process, so new code is in effect anyway — force-stop adds nothing and destroys the user's setting.

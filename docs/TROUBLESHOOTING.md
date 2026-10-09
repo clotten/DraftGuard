@@ -410,3 +410,36 @@ cannot quietly drop one.
 **Why the mirror exists:** the real writer is the `LogStore` instance held by the capture service,
 while the diagnostic panel builds its own instance — reading instance counters across objects gives
 zeros and looks like a broken storage layer. So writes also update a static `diagXxx` snapshot.
+
+---
+
+## 12. Never `force-stop` this app
+
+Reported repeatedly by the user as: *"I turned accessibility on and it still says recording has
+stopped."*
+
+Measured behaviour of `adb shell am force-stop com.draftguard`:
+
+- sets `accessibility_enabled` to `0`
+- **deletes our service from `enabled_accessibility_services`**
+- leaves `Bound services:{}`
+- launching the app afterwards does **not** bring it back
+
+Meanwhile `adb install -r` — the operation actually needed to load new code — leaves accessibility
+untouched, and the package-update event causes the system to re-bind the service.
+
+So the habit of "force-stop first, to be sure the new code runs" was **destroying the user's
+accessibility setting on every build**, and the app got blamed for it. The install alone restarts
+the process.
+
+**Rule:** when testing on a device, never `force-stop` an app whose accessibility service matters.
+If it has already happened, re-enable by hand, or:
+
+```bash
+adb shell settings put secure accessibility_enabled 0
+adb shell settings put secure enabled_accessibility_services null
+sleep 2
+adb shell settings put secure accessibility_enabled 1
+adb shell settings put secure enabled_accessibility_services com.draftguard/com.draftguard.TypelogService
+# then run `adb install -r` once — the package-update event re-binds it
+```
