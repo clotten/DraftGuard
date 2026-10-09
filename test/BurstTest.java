@@ -37,6 +37,28 @@ public class BurstTest {
         return r;
     }
 
+    /**
+     * 秒级粒度的流：用于测试"几秒内快速改字"这类判据。
+     * 原有的 stream 是分钟粒度（每条相隔 1 分钟），足够测长期分段，
+     * 但测不出"3 秒内整词重打"这种情况。
+     */
+    static List<LogStore.Row> streamSec(String app, String field, int startSec, String... versions) {
+        List<LogStore.Row> rows = new ArrayList<LogStore.Row>();
+        int s = startSec;
+        for (String v : versions) {
+            LogStore.Row r = new LogStore.Row();
+            r.app = app;
+            r.field = field;
+            r.text = v;
+            r.chars = v.length();
+            r.comp = false;
+            r.ts = String.format("2026-01-01T00:%02d:%02d.000", s / 60, s % 60);
+            r.minute = String.format("%02d:%02d", s / 60, s % 60);
+            rows.add(r);
+            s += 3;      // 每条相隔 3 秒
+        }
+        return rows;
+    }
     static List<LogStore.Row> stream(String app, String field, String base, int startMin,
                                      String... versions) {
         List<LogStore.Row> rows = new ArrayList<LogStore.Row>();
@@ -153,6 +175,17 @@ public class BurstTest {
         check("删字算一次修改", Burst.isMidEdit("你好呀我饿", "你好呀我"), "未识别");
         check("短句微调不算整段重写", !Burst.isFullRewrite("你好呀我", "你好呀我很"), "误判为重写");
         check("换句子算整段重写", Burst.isFullRewrite("第一句话在这里哦", "完全不同的另一段内容"), "未识别");
+
+        System.out.println("\n== 13. 整词打错重打（共同开头为 0，仍应合并）==");
+        List<Burst> b13 = Burst.group(streamSec(APP, F, 0, "来发展", "开发者"));
+        check("短间隔+短内容：合并为 1 段", b13.size() == 1, dump(b13));
+        check("取改对后的内容", b13.size() == 1 && "开发者".equals(b13.get(0).text),
+                b13.isEmpty() ? "空" : b13.get(0).text);
+        List<Burst> b13b = Burst.group(streamSec(APP, F, 0, "你好呀", "小朋友"));
+        check("无共同开头也要分段（连发消息）", b13b.size() == 2, dump(b13b));
+        List<Burst> b13c = Burst.group(streamSec(APP, F, 0,
+                "好耶我要去做一个很长的事情了", "完全不同的另一句长话在这里"));
+        check("长内容无共同开头：分段", b13c.size() == 2, dump(b13c));
 
         System.out.println("\n== 12. 点了发送 ⇒ 必须分段（最可靠的判据）==");
         SendBoundary.resetForTest();

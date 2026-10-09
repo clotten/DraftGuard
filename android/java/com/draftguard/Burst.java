@@ -42,6 +42,16 @@ final class Burst {
      * 用来区分"改错别字"（共同开头通常很长）与"连发另一条消息"（几乎没有共同开头）。
      */
     private static final int MIN_COMMON_PREFIX = 2;
+    /**
+     * "短内容 + 极短间隔"视为同一个词的修改。
+     *
+     * 用于捕捉"整词打错后重打"：实测 13:21:43 &lt;来发展&gt; → 13:21:46 &lt;开发者&gt;，
+     * 只隔 3.4 秒、中间无任何中间状态，用户在设置里找"开发者选项"打错了字。
+     * 这两者共同开头为 0，靠共同开头判不出来。
+     */
+    private static final long RAPID_EDIT_MS = 10_000L;
+    /** 判为"改一个词"的最大长度 */
+    private static final int RAPID_EDIT_MAX = 8;
 
     String app = "";
     String field = "";
@@ -110,6 +120,30 @@ final class Burst {
         return out;
     }
 
+    /**
+     * 两个短串是否共用一个"实义字"（排除高频虚词）。
+     *
+     * 「的了吗呢啊吧呀哦嗯是你我在」这类字在任何句子里都常见，
+     * 用它们判断"是不是同一个词"没有意义，反而会把无关的两条消息误并。
+     */
+    private static boolean shareContentChar(String a, String b) {
+        for (int i = 0; i < a.length(); i++) {
+            char ch = a.charAt(i);
+            if (isCommonChar(ch)) {
+                continue;
+            }
+            if (b.indexOf(ch) >= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isCommonChar(char ch) {
+        String common = "的了吗呢啊吧呀哦嗯是你我在有和就不人都一上了也还很";
+        return common.indexOf(ch) >= 0 || ch == ' ' || ch == '，' || ch == '。' || ch == '！';
+    }
+
     private static boolean mergeable(Burst cur, Burst next) {
         if (!cur.app.equals(next.app) || !cur.field.equals(next.field)) {
             return false;
@@ -149,7 +183,28 @@ final class Burst {
         // 实测依据：微信发消息**不产生空状态事件**，文本会直接从旧消息跳到新消息：
         //   ev: 16 EditText [你好] → [你好呀] → [小朋友]
         // 所以"靠清空判边界"在微信里失效，只能靠共同开头这一形态特征。
-        return commonPrefix(a, b) >= MIN_COMMON_PREFIX;
+        if (commonPrefix(a, b) >= MIN_COMMON_PREFIX) {
+            return true;
+        }
+
+        // 到这里"共同开头"很短，但还可能是**把整个词打错重打**的情况。
+        // 实测（设置里找开发者选项）：13:21:43 <来发展> → 13:21:46 <开发者>，
+        // 只隔 3.4 秒，中间没有任何中间状态 —— 用户打错后整词重打，
+        // 而"来发展"与"开发者"共同开头为 0，靠共同开头判不出来。
+        //
+        // 判据：间隔很短 + 两边都是短内容 ⇒ 是在改一个词，不是发了新消息。
+        // 聊天里连发两条短消息的间隔通常更长（要按发送、再打字），
+        // 而且**两条完全不同的话不会在几秒内要求用户重打一遍**。
+        long gap = msOf(next.firstTs) - msOf(cur.lastTs);
+        if (gap > RAPID_EDIT_MS || a.length() > RAPID_EDIT_MAX || b.length() > RAPID_EDIT_MAX) {
+            return false;
+        }
+        // 光靠"间隔短"不够：聊天里连发两条短消息的间隔同样只有一两秒
+        // （实测 23:52:15 <你好呀> → 23:52:17 <小朋友>）。
+        // 再加一条：两边要**共用至少一个"实义字"**，才认为是在重打同一个词。
+        // 「来发展」与「开发者」共用「发」→ 同一个词的错打；
+        // 「你好呀」与「小朋友」一字不共 → 两条消息。
+        return shareContentChar(a, b);
     }
     /**
      * 是否"整段重写"（应视为另一段话）。

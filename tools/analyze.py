@@ -64,7 +64,25 @@ def mergeable(cur: dict, nxt: dict) -> bool:
         return True
     if is_full_rewrite(a, b):
         return False
-    return common_prefix(a, b) >= MIN_COMMON_PREFIX
+    if common_prefix(a, b) >= MIN_COMMON_PREFIX:
+        return True
+    # 短间隔 + 短内容 + 共用实义字 ⇒ 整词打错重打（实测 来发展 → 开发者）
+    gap = ms_of(nxt["ts"]) - ms_of(cur["ts"])
+    if gap <= 10_000 and len(a) <= 8 and len(b) <= 8:
+        return share_content_char(a, b)
+    return False
+
+
+COMMON = set("的了吗呢啊吧呀哦嗯是你我在有和就不人都一上了也还很 ，。！")
+
+
+def share_content_char(a: str, b: str) -> bool:
+    for ch in a:
+        if ch in COMMON:
+            continue
+        if ch in b:
+            return True
+    return False
 
 
 def load(day_dir: Path) -> list[dict]:
