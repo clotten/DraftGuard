@@ -956,8 +956,18 @@ public class MainActivity extends Activity {
                     + lastSaved
                     + "保存位置：应用私有目录（其他 App 读不到）";
             ui.post(() -> {
-                setCard(statsView, "统计", stats);
-                setCard(appsView, "今天记录过的 App", apps.toString().trim());
+                // 同样只在看得见时刷新：这两个卡片在"应用"页上方，
+                // 用户滚下去看记录时它们一变高就会把内容顶走
+                if (isFullyVisible(statsView)) {
+                    setCard(statsView, "统计", stats);
+                } else {
+                    skippedRefresh = true;
+                }
+                if (isFullyVisible(appsView)) {
+                    setCard(appsView, "今天记录过的 App", apps.toString().trim());
+                } else {
+                    skippedRefresh = true;
+                }
             });
         }, "typelog-ui").start();
     }
@@ -991,8 +1001,13 @@ public class MainActivity extends Activity {
                     + "—— 最近一次内容 ——\n"
                     + tail(TypelogService.lastText, 200);
         }
-        setCard(liveView, "实时预览（最近一次输入）", body);
-        setCard(statusView, "采集状态",
+        if (isFullyVisible(liveView)) {
+            setCard(liveView, "实时预览（最近一次输入）", body);
+        } else {
+            skippedRefresh = true;
+        }
+        if (isFullyVisible(statusView)) {
+            setCard(statusView, "采集状态",
                 (isServiceEnabled() ? "● 已开启，正在记录" : "○ 未开启")
                 + "\n本次会话落盘 " + TypelogService.written + " 条（服务重启会归零，历史记录不会丢）"
                 + "　收到事件 " + TypelogService.evAll
@@ -1000,6 +1015,9 @@ public class MainActivity extends Activity {
                 + "\n取到文本 " + TypelogService.evCaptured
                 + "　兜底找回 " + TypelogService.evTraverseHit
                 + "　跳过密码框 " + TypelogService.skippedPassword);
+        } else {
+            skippedRefresh = true;
+        }
     }
 
     private static String tail(String s, int n) {
@@ -1166,6 +1184,40 @@ public class MainActivity extends Activity {
             return;
         }
         scrollRoot.post(() -> scrollRoot.smoothScrollTo(0, Math.max(0, resultView.getTop() - dp(56))));
+    }
+
+    /**
+     * 这个卡片此刻是否**完整可见**。
+     *
+     * 为什么要判断：每次事件都重写状态卡与实时预览的文字（实时预览最多 200 字），
+     * 它们高度一变，**滚动位置下方的所有内容都会整体位移** ——
+     * 用户正看记录，界面却像"自己跳回统计区"。
+     * 看不见的卡片刷新没有任何意义，只会制造跳动。
+     */
+    private boolean isFullyVisible(View v) {
+        if (scrollRoot == null || v == null || v.getParent() == null) {
+            return false;
+        }
+        int y = scrollRoot.getScrollY();
+        int h = scrollRoot.getHeight();
+        return v.getTop() >= y && v.getBottom() <= y + h;
+    }
+
+    /** 有卡片因为不可见而跳过了刷新，滚回来时要补上 */
+    private boolean skippedRefresh;
+
+    /** 滚动时补刷：之前跳过的卡片若已可见，立刻更新，避免显示过期内容 */
+    private void onScrollRefresh() {
+        if (!skippedRefresh) {
+            return;
+        }
+        skippedRefresh = false;
+        refreshLive();
+        long now = System.currentTimeMillis();
+        if (now - lastStatsRefresh > STATS_REFRESH_MS) {
+            lastStatsRefresh = now;
+            refreshAll();
+        }
     }
 
     private String rangeLabel() {
