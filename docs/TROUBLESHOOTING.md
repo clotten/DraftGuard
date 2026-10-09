@@ -354,3 +354,30 @@ reports the expected version** and fail the build otherwise.
 
 **Lesson:** a flag that is silently ignored is worse than one that errors. Any property you depend
 on for correctness needs a post-build assertion.
+---
+
+## 10. Refreshing content above the scroll position throws the user off
+
+Reported as: "whenever I take a screenshot or an event arrives, the screen jumps back to the
+statistics area, no matter where I scrolled to."
+
+The mechanism is worth naming, because it looks like a scroll bug and is not one:
+
+- Every accessibility event rewrote the top cards (status + live preview).
+- The live-preview card shows up to 200 characters, so its **height changes** on each event.
+- Content below the user's scroll position therefore **shifts**, and the viewport ends up
+  showing whatever now occupies that offset — which reads as "the app jumped".
+- A screenshot produces a window event, which goes down the same refresh path, hence
+  "it jumps whenever I screenshot".
+
+`showToday()` / `scrollToResults()` were not involved — they only run on button taps.
+
+**Fix:** before updating a card, check whether it is **fully visible** inside the ScrollView's
+viewport (`[scrollY, scrollY + height]` vs the view's top/bottom). If not, skip the update —
+refreshing something nobody can see has no upside and shifts what they *are* looking at.
+Skipped refreshes are remembered and applied on the next scroll, so scrolling back up never
+shows stale data.
+
+**Lesson:** a scroll position is a promise to the user. Anything that changes the height of
+content *above* that position breaks it. When a list re-renders in place, gate updates on
+visibility, or the UI will appear to move on its own.
