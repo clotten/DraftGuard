@@ -62,6 +62,20 @@ public class MainActivity extends Activity {
     /** 看今天记录时是否显示原始逐条版本（默认合并成整段，见 Burst） */
     private boolean showRawRows = false;
 
+    /**
+     * 记录视图的时间范围（分钟）。0 = 不限。
+     *
+     * 为什么需要它：实测半天就有 959 个版本 / 918 段，
+     * 全部铺出来是一整面文字墙，根本没法一段段看。默认只看最近 2 小时。
+     */
+    private int rangeMinutes = 0;   // 0 = 全部时间（默认：避免"看起来没记录"）
+
+    /** 应用筛选（空 = 全部） */
+    private final java.util.Set<String> appFilter = new java.util.HashSet<>();
+
+    /** 一次最多渲染多少段，避免超长文本块 */
+    private static final int MAX_SEGMENTS = 200;
+
     private final BroadcastReceiver statsReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -191,6 +205,14 @@ public class MainActivity extends Activity {
         Button btnExport = button("分享 zip");
         btnExport.setOnClickListener(v -> doExport());
         expRow.addView(btnExport);
+
+        Button btnRange = button("时间范围");
+        btnRange.setOnClickListener(v -> chooseRange());
+        expRow2.addView(btnRange);
+
+        Button btnAppFilter = button("筛选应用");
+        btnAppFilter.setOnClickListener(v -> chooseAppFilter());
+        expRow2.addView(btnAppFilter);
 
         final Button btnToggleView = button(showRawRows ? "看合并视图" : "看逐条版本");
         btnToggleView.setOnClickListener(v -> {
@@ -700,37 +722,115 @@ public class MainActivity extends Activity {
                 }
             } else {
                 List<Burst> bursts = Burst.groupNewestFirst(rows);
-                sb.append("【合并视图】共 ").append(bursts.size()).append(" 段完整内容")
-                  .append("（原始 ").append(rows.size()).append(" 个版本已全部存盘）\n")
-                  .append("同一次连续输入只显示最后成型的整段。\n\n");
-                int shown = 0;
-                for (int i = 0; i < bursts.size() && shown < 200; i++, shown++) {
-                    Burst b = bursts.get(i);
-                    sb.append(b.firstTs, 11, 16);
-                    if (!b.firstTs.substring(11, 16).equals(b.lastTs.substring(11, 16))) {
-                        sb.append(" → ").append(b.lastTs, 11, 16);
+                // 时间范围筛选
+                long from = rangeMinutes <= 0 ? 0
+                        : System.currentTimeMillis() - rangeMinutes * 60_000L;
+                List<Burst> kept = new java.util.ArrayList<>();
+                for (Burst b : bursts) {
+                    if (from > 0 && Burst.msOf(b.firstTs) < from) {
+                        continue;
                     }
-                    sb.append("  ").append(name(labels, b.app))
-                      .append("　").append(b.text.length()).append(" 字");
-                    if (b.versions > 1) {
-                        sb.append("（由 ").append(b.versions).append(" 个版本合并）");
+                    if (!appFilter.isEmpty() && !appFilter.contains(b.app)) {
+                        continue;
                     }
-                    if (b.comp) {
-                        sb.append("（末尾未上屏）");
-                    }
-                    sb.append("\n").append(b.text).append("\n\n");
+                    kept.add(b);
                 }
-                if (bursts.size() > shown) {
-                    sb.append("… 还有 ").append(bursts.size() - shown).append(" 段，请导出查看\n");
+                boolean truncated = kept.size() > MAX_SEGMENTS;
+                if (truncated) {
+                    kept = new java.util.ArrayList<>(kept.subList(0, MAX_SEGMENTS));
+                }
+                final CharSequence rendered = BurstRenderer.render(
+                        kept, labels, rows.size(), truncated, MAX_SEGMENTS);
+                final String title = "今天全部记录（合并视图 · " + rangeLabel()
+                        + (appFilter.isEmpty() ? "" : " · 已筛选应用") + "）";
+                // 注意：不能"先 setText 正文、再只改标题" —— 那样会把正文覆盖掉。
+                // 标题与渲染结果必须一次设置。
+                ui.post(() -> resultView.setText(mergeTitle(title, rendered)));
+                return;
+            }
+            // 走到这里只剩"逐条视图"分支（合并视图已在上面 return）
+            final String text = sb.toString().trim();
+            ui.post(() -> setCard(resultView, "今天全部记录（逐条视图）", text));
+        }, "typelog-today").start();
+    }
+
+    /** 把加粗标题与已渲染好的 Spannable 正文拼到一起（避免分两步设置导致正文被覆盖） */
+    private static CharSequence mergeTitle(String title, CharSequence body) {
+        android.text.SpannableStringBuilder ss = new android.text.SpannableStringBuilder();
+        int start = ss.length();
+        ss.append(title);
+        ss.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), start, ss.length(),
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        ss.append("\n");
+        ss.append(body);
+        return ss;
+    }
+
+    private String rangeLabel() {
+        if (rangeMinutes <= 0) {
+            return "全部时间";
+        }
+        if (rangeMinutes < 60) {
+            return "最近 " + rangeMinutes + " 分钟";
+        }
+        return "最近 " + (rangeMinutes / 60) + " 小时";
+    }
+
+    /** 时间范围选择：实测半天就有 918 段，全铺出来没法看，所以给了范围开关 */
+    private void chooseRange() {
+        final int[] opts = {0, 60, 360, 1440};
+        String[] labels = {"全部时间（默认）", "最近 1 小时", "最近 6 小时", "最近 24 小时"};
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("记录的时间范围")
+                .setItems(labels, (d, which) -> {
+                    rangeMinutes = opts[which];
+                    toast("已切换到「" + labels[which] + "」");
+                    showToday();
+                })
+                .show();
+    }
+
+    /** 应用筛选：从磁盘实际记录过的应用里挑 */
+    private void chooseAppFilter() {
+        new Thread(() -> {
+            final LogStore store = new LogStore(getFilesDir(), 0);
+            final String today = DAY.format(new Date());
+            final Map<String, String> labels = store.labels(today);
+            final java.util.LinkedHashSet<String> apps = new java.util.LinkedHashSet<>();
+            for (LogStore.Row r : store.readDay(today, 0)) {
+                if (r.app != null && !r.app.isEmpty()) {
+                    apps.add(r.app);
                 }
             }
-
-            final String text = sb.toString().trim();
+            final String[] pkgs = apps.toArray(new String[0]);
+            final String[] names = new String[pkgs.length];
+            final boolean[] checked = new boolean[pkgs.length];
+            for (int i = 0; i < pkgs.length; i++) {
+                names[i] = name(labels, pkgs[i]) + "（" + pkgs[i] + "）";
+                checked[i] = appFilter.contains(pkgs[i]);
+            }
             ui.post(() -> {
-                setCard(resultView, "今天全部记录"
-                        + (showRawRows ? "（逐条视图）" : "（合并视图）"), text);
+                if (pkgs.length == 0) {
+                    toast("今天还没有记录");
+                    return;
+                }
+                new android.app.AlertDialog.Builder(this)
+                        .setTitle("勾选 = 只看这些应用（都不勾 = 全部）")
+                        .setMultiChoiceItems(names, checked, (d, which, isChecked) -> {
+                            if (isChecked) {
+                                appFilter.add(pkgs[which]);
+                            } else {
+                                appFilter.remove(pkgs[which]);
+                            }
+                        })
+                        .setPositiveButton("应用", (d, w) -> showToday())
+                        .setNeutralButton("清空筛选", (d, w) -> {
+                            appFilter.clear();
+                            showToday();
+                        })
+                        .show();
             });
-        }, "typelog-today").start();
+        }, "typelog-appfilter").start();
     }
 
     private static String name(Map<String, String> labels, String app) {

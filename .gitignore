@@ -33,3 +33,6 @@ data/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 导出的个人记录（含隐私内容，不进仓库）
+logs-*/
