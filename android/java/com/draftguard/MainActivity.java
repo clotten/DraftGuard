@@ -46,13 +46,24 @@ import java.util.zip.ZipOutputStream;
  */
 public class MainActivity extends Activity {
 
-    private LinearLayout root;
-    private TextView statusView;
-    private TextView liveView;
-    private TextView statsView;
-    private TextView appsView;
-    private TextView resultView;
+// 配色：只用三种前景色，靠字号而不是靠颜色做层次
+    private static final int COL_FG = 0xFFE8ECF3;      // 正文
+    private static final int COL_DIM = 0xFF8B95A7;     // 次要信息
+    private static final int COL_ACCENT = 0xFF5B9DFF;  // 可点/强调
+    private static final int COL_CARD = 0xFF232833;    // 卡片底色（比页面明显亮一些，才看得出是卡片）
+
+    private LinearLayout pageRoot;          // 记录页的容器（= page1）
+    private TextView summaryText;           // 顶部一行摘要
     private EditText searchBox;
+    private android.widget.ListView listRecords;
+    private RecordAdapter adapter;
+    private Button btnRange, btnRaw;
+
+    /** 记录列表的数据：合并视图下是 Burst，逐条视图下是 Row */
+    private final java.util.List<Object> items = new java.util.ArrayList<>();
+
+    /** 搜索关键词（空 = 不过滤）。搜索直接过滤列表，而不是另开一个结果区 */
+    private String query = "";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final SimpleDateFormat TS =
@@ -60,14 +71,11 @@ public class MainActivity extends Activity {
     private final SimpleDateFormat DAY = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
     private final SimpleDateFormat HM = new SimpleDateFormat("HH:mm", Locale.US);
 
-    /** 看今天记录时是否显示原始逐条版本（默认合并成整段，见 Burst） */
+    /** 看记录时是否显示原始逐条版本（默认合并成整段，见 Burst） */
     private boolean showRawRows = false;
 
-    /** 外层滚动容器：用于"看记录"后自动把按钮/结果区滚到可见 */
-    private android.widget.ScrollView scrollRoot;
-
     // ── 导航与第二页（应用列表）────────────────────────────────
-    private android.widget.ScrollView page1, page2;
+    private android.widget.ScrollView page2;
     private LinearLayout appsRoot;
     private TextView navRecordsText, navAppsText;
     private View navRecordsBar, navAppsBar;
@@ -97,13 +105,13 @@ public class MainActivity extends Activity {
     private final BroadcastReceiver statsReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            refreshLive();
-            // 统计卡片原来只在 onResume 时刷新，结果记录在涨、卡片却停在启动那一刻，
-            // 看起来像"什么都没记"。这里让它跟着记录走，但节流以免频繁读盘。
+            // 只刷新摘要与列表。列表内部会保留滚动位置，
+            // 不再重写"滚动位置上方的卡片"（那会让界面看起来自己跳动）。
             long now = System.currentTimeMillis();
             if (now - lastStatsRefresh > STATS_REFRESH_MS) {
                 lastStatsRefresh = now;
-                refreshAll();
+                refreshSummary();
+                refreshList();
             }
         }
     };
@@ -116,8 +124,6 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        root = findViewById(R.id.root);
-        scrollRoot = (android.widget.ScrollView) root.getParent();
         setupNav();
         // 打开应用时确保保活服务在跑（用户可能在设置里开过又关了）
         if (Prefs.keepAlive(this)) {
@@ -125,7 +131,7 @@ public class MainActivity extends Activity {
         } else {
             KeepAliveService.stop(this);
         }
-        buildUi();
+        buildRecordsPage();
     }
 
     @Override
@@ -138,7 +144,8 @@ public class MainActivity extends Activity {
             registerReceiver(statsReceiver, f);
         }
         lastStatsRefresh = System.currentTimeMillis();
-        refreshAll();
+        refreshSummary();
+        refreshList();
     }
 
     @Override
@@ -152,225 +159,139 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ 界面
 
-    private void buildUi() {
-        statusView = card("采集状态", "正在检测…");
-        root.addView(statusView);
+    private void buildRecordsPage() {
+        pageRoot.removeAllViews();
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, dp(8), 0, dp(8));
-        root.addView(row);
-
-        Button btnToggle = button("去开启 / 检查服务");
-        btnToggle.setOnClickListener(v -> {
-            try {
-                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-                toast("在列表里找到「字迹留存」，打开开关");
-            } catch (Throwable t) {
-                toast("打不开无障碍设置，请手动到 设置 → 无障碍 里打开");
-            }
+        // 1) 顶部摘要：一行小字。原来的状态/实时预览/统计/应用列表四张卡片
+        //    都收进了「更多 → 诊断」，日常只留这一行。
+        LinearLayout summaryRow = new LinearLayout(this);
+        summaryRow.setOrientation(LinearLayout.HORIZONTAL);
+        summaryRow.setGravity(Gravity.CENTER_VERTICAL);
+        summaryRow.setPadding(dp(14), dp(10), dp(10), dp(2));
+        summaryText = new TextView(this);
+        summaryText.setTextColor(COL_DIM);
+        summaryText.setTextSize(12);
+        summaryText.setText("正在检测…");
+        summaryText.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        summaryRow.addView(summaryText);
+        TextView btnRefresh = link("刷新");
+        btnRefresh.setOnClickListener(v -> {
+            refreshSummary();
+            refreshList();
         });
-        row.addView(btnToggle);
+        summaryRow.addView(btnRefresh);
+        pageRoot.addView(summaryRow);
 
-        Button btnRefresh = button("刷新");
-        btnRefresh.setOnClickListener(v -> refreshAll());
-        row.addView(btnRefresh);
-
-        liveView = card("实时预览（最近一次输入）", "还没有捕获到输入。开启服务后，去任意 App 打几个字试试。");
-        root.addView(liveView);
-
-        statsView = card("统计", "—");
-        root.addView(statsView);
-
-        appsView = card("今天记录过的 App", "—");
-        root.addView(appsView);
-
-        // 搜索
+        // 2) 搜索行：搜索直接过滤下面的列表，不再另开一个结果区
         LinearLayout searchRow = new LinearLayout(this);
         searchRow.setOrientation(LinearLayout.HORIZONTAL);
-        searchRow.setPadding(0, dp(10), 0, 0);
-        root.addView(searchRow);
-
+        searchRow.setGravity(Gravity.CENTER_VERTICAL);
+        searchRow.setPadding(dp(14), dp(4), dp(14), 0);
         searchBox = new EditText(this);
         searchBox.setHint("搜索记录过的文字…");
-        searchBox.setTextColor(Color.parseColor("#E8ECF3"));
-        searchBox.setHintTextColor(Color.parseColor("#8B95A7"));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        searchBox.setLayoutParams(lp);
+        searchBox.setHintTextColor(COL_DIM);
+        searchBox.setTextColor(COL_FG);
+        searchBox.setTextSize(14);
+        searchBox.setSingleLine(true);
+        searchBox.setPadding(0, dp(8), 0, dp(8));
+        searchBox.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        searchBox.setOnEditorActionListener((v, actionId, ev) -> {
+            doSearch();
+            return true;
+        });
         searchRow.addView(searchBox);
-
         Button btnSearch = button("搜");
         btnSearch.setOnClickListener(v -> doSearch());
         searchRow.addView(btnSearch);
+        pageRoot.addView(searchRow);
 
-        resultView = card("搜索结果", "输入关键词后点「搜」，会从今天往前找。");
-        // 注意：resultView 延后到所有按钮之后才 addView（见本方法末尾）——
-        // 否则结果一长，用户要翻过整屏文字才能点到「时间范围 / 筛选应用」等按钮。
-
-        // 导出
-        LinearLayout expRow2 = new LinearLayout(this);
-        expRow2.setOrientation(LinearLayout.HORIZONTAL);
-        expRow2.setPadding(0, dp(10), 0, 0);
-        root.addView(expRow2);
-
-        LinearLayout expRow = new LinearLayout(this);
-        expRow.setOrientation(LinearLayout.HORIZONTAL);
-        expRow.setPadding(0, dp(10), 0, dp(20));
-        root.addView(expRow);
-
-        Button btnExportPub = button("导出到下载目录");
-        btnExportPub.setOnClickListener(v -> doExportToDownloads());
-        expRow.addView(btnExportPub);
-
-        Button btnExport = button("分享 zip");
-        btnExport.setOnClickListener(v -> doExport());
-        expRow.addView(btnExport);
-
-        Button btnRange = button("时间范围");
+        // 3) 操作行：最常用的三个，其余在「更多」
+        LinearLayout actionRow = new LinearLayout(this);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+        actionRow.setPadding(dp(14), dp(8), dp(14), dp(6));
+        btnRange = button(rangeLabel());
         btnRange.setOnClickListener(v -> chooseRange());
-        expRow2.addView(btnRange);
-
-        Button btnAppFilter = button("筛选应用");
-        btnAppFilter.setOnClickListener(v -> chooseAppFilter());
-        expRow2.addView(btnAppFilter);
-
-        final Button btnToggleView = button(showRawRows ? "看合并视图" : "看逐条版本");
-        btnToggleView.setOnClickListener(v -> {
+        actionRow.addView(btnRange);
+        btnRaw = button(showRawRows ? "看合并" : "看逐条");
+        btnRaw.setOnClickListener(v -> {
             showRawRows = !showRawRows;
-            btnToggleView.setText(showRawRows ? "看合并视图" : "看逐条版本");
-            showToday();
+            btnRaw.setText(showRawRows ? "看合并" : "看逐条");
+            refreshList();
         });
-        expRow2.addView(btnToggleView);
+        actionRow.addView(btnRaw);
+        Button btnMore = button("更多");
+        btnMore.setOnClickListener(v -> showMore());
+        actionRow.addView(btnMore);
+        pageRoot.addView(actionRow);
 
-        Button btnOpen = button("看今天全部记录");
-        btnOpen.setOnClickListener(v -> showToday());
-        expRow.addView(btnOpen);
-
-        LinearLayout setRow = new LinearLayout(this);
-        setRow.setOrientation(LinearLayout.HORIZONTAL);
-        setRow.setPadding(0, 0, 0, dp(24));
-        root.addView(setRow);
-
-        Button btnDiag = button("诊断");
-        btnDiag.setOnClickListener(v -> showDiag());
-        setRow.addView(btnDiag);
-
-        Button btnClear = button("清除全部记录");
-        btnClear.setOnClickListener(v -> confirmClearAll());
-        setRow.addView(btnClear);
-        Button btnSettings = button("设置");
-        btnSettings.setOnClickListener(v -> showSettings());
-        setRow.addView(btnSettings);
-
-        // 结果卡片放在所有按钮**之后** addView。
-        // 滚动顺序变成：状态 → 统计 → 应用列表 → 搜索 → 按钮 → 结果，
-        // 想操作时按钮就在手边，不必先翻过整屏结果文字（用户反馈的痛点）。
-        root.addView(resultView);
+        // 4) 列表占满剩余高度。用 ListView 而不是往 TextView 里拼字符串 ——
+        //    几百条时后者是一整面文字墙，而且没有视图回收会卡。
+        listRecords = new android.widget.ListView(this);
+        listRecords.setDivider(null);
+        listRecords.setDividerHeight(0);
+        listRecords.setSelector(new android.graphics.drawable.ColorDrawable(0x00000000));
+        listRecords.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        adapter = new RecordAdapter();
+        listRecords.setAdapter(adapter);
+        pageRoot.addView(listRecords);
     }
+
+    /** 轻量文字按钮（用于"刷新"这类次要动作，不做成方块按钮） */
+    private TextView link(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(COL_ACCENT);
+        t.setTextSize(13);
+        t.setPadding(dp(10), dp(4), dp(4), dp(4));
+        t.setClickable(true);
+        return t;
+    }
+
+    /** 圆角卡片背景 */
+    private android.graphics.drawable.Drawable rounded(int fill, int radiusDp) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(fill);
+        float r = dp(radiusDp);
+        g.setCornerRadius(r);
+        return g;
+    }
+
+    /** 「更多」：导出、分享、诊断、清除、设置都收在这里 */
+    private void showMore() {
+        final String[] items = {
+                "导出到下载目录", "分享 zip", "诊断", "清除全部记录", "设置",
+        };
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("更多")
+                .setItems(items, (d, which) -> {
+                    switch (which) {
+                        case 0:
+                            doExportToDownloads();
+                            break;
+                        case 1:
+                            doExport();
+                            break;
+                        case 2:
+                            showDiag();
+                            break;
+                        case 3:
+                            confirmClearAll();
+                            break;
+                        default:
+                            showSettings();
+                            break;
+                    }
+                })
+                .show();
+    }
+
+
 
     /** 诊断面板：一眼看出"断在哪一环" */
-    private void showDiag() {
-        setCard(resultView, "诊断", "读取中…");
-        new Thread(() -> {
-            final LogStore store = new LogStore(getFilesDir(), 0);
-            final String today = DAY.format(new Date());
-            final Map<String, String> labels = store.labels(today);
-
-            StringBuilder sb = new StringBuilder();
-            sb.append("收到的无障碍事件总数：").append(TypelogService.evAll).append("\n");
-            sb.append("其中文本变化事件：").append(TypelogService.evText).append("\n");
-            sb.append("取到文本并进入记录：").append(TypelogService.evCaptured).append("\n");
-            sb.append("事件里节点为空(靠兜底找回)：").append(TypelogService.evSourceNull)
-              .append(" / 兜底成功 ").append(TypelogService.evTraverseHit).append("\n");
-            sb.append("节点不是输入框：").append(TypelogService.evNotEditable).append("\n");
-            sb.append("跳过系统UI/不可记录包：").append(TypelogService.skippedSelf).append("\n");
-            sb.append("跳过输入法键盘自身事件：").append(TypelogService.skippedIme).append("\n");
-            sb.append("跳过删除操作(按设置)：").append(TypelogService.skippedDelete).append("\n");
-            sb.append("检测到点击「发送」：").append(TypelogService.sendBoundaries)
-              .append(" 次（消息分段依据）\n");
-            sb.append("跳过未聚焦的框：").append(TypelogService.skippedNoFocus).append("\n");
-            sb.append("跳过占位提示/单字碎片：").append(TypelogService.skippedNoise).append("\n");
-            sb.append("跳过(设置里排除的)：").append(TypelogService.skippedIgnored).append("\n");
-            sb.append("跳过密码框：").append(TypelogService.skippedPassword).append("\n");
-            sb.append("写入失败：").append(TypelogService.errors).append("\n\n");
-
-            sb.append("哪些应用发过事件（次数）：\n");
-            boolean any = false;
-            synchronized (TypelogService.ALL_EVENT_PKGS) {
-                List<Map.Entry<String, Integer>> es =
-                        new ArrayList<>(TypelogService.ALL_EVENT_PKGS.entrySet());
-                Collections.sort(es, (a, b) -> b.getValue() - a.getValue());
-                for (int i = 0; i < es.size() && i < 12; i++) {
-                    Map.Entry<String, Integer> e = es.get(i);
-                    String n = labels.get(e.getKey());
-                    Integer t = TypelogService.TEXT_EVENT_PKGS.get(e.getKey());
-                    sb.append("· ").append(TextUtils.isEmpty(n) ? e.getKey() : n)
-                      .append("  [").append(e.getKey()).append("]  总 ").append(e.getValue())
-                      .append(" 次，其中文本变化 ").append(t == null ? 0 : t).append(" 次\n");
-                    any = true;
-                }
-            }
-            if (!any) {
-                sb.append("（一次都没收到）\n");
-            }
-
-            // 微信专项判断：这是最常用来验证的场景
-            Integer wx = TypelogService.ALL_EVENT_PKGS.get("com.tencent.mm");
-            sb.append("\n微信(com.tencent.mm)：");
-            if (wx == null) {
-                sb.append("一次事件都没收到 ← 系统层面没放行，见下方解决步骤");
-            } else {
-                Integer wxt = TypelogService.TEXT_EVENT_PKGS.get("com.tencent.mm");
-                sb.append("收到 ").append(wx).append(" 次事件，其中文本变化 ")
-                  .append(wxt == null ? 0 : wxt).append(" 次");
-                if (wxt == null) {
-                    sb.append(" ← 微信不发文本变化事件，应走轮询兜底（确认设置里轮询是开的）");
-                }
-            }
-
-            sb.append("\n\n最近一次扫描情况：\n")
-              .append(TextUtils.isEmpty(TypelogService.lastScanInfo)
-                      ? "（还没有扫描失败过）" : TypelogService.lastScanInfo).append("\n\n");
-
-            sb.append("磁盘上的原始文件（绕开所有缓存，最硬的证据）：\n");
-            for (String line : store.fileInventory(today, 60)) {
-                sb.append("· ").append(line).append("\n");
-            }
-            sb.append("\n");
-            sb.append("最近 25 条原始事件（需在设置里开诊断日志）：\n");
-            java.util.List<String> diag = TypelogService.DIAG;
-            synchronized (diag) {
-                int from = Math.max(0, diag.size() - 25);
-                for (int i = from; i < diag.size(); i++) {
-                    sb.append("· ").append(diag.get(i)).append("\n");
-                }
-                if (diag.isEmpty()) {
-                    sb.append("（诊断日志未开启）\n");
-                }
-            }
-
-            // 主动报警：焦点过滤如果过严，表现就是"跳过数一直涨、却一条都没记到"
-            if (TypelogService.skippedNoFocus >= 20 && TypelogService.evCaptured == 0) {
-                sb.append("\n⚠ 注意：已跳过 ").append(TypelogService.skippedNoFocus)
-                  .append(" 个未聚焦的框，但一条都没记到 ——");
-                sb.append("\n   焦点过滤可能对本机过严。到「设置」里把");
-                sb.append("\n   「只记录有焦点的输入框」关掉试试，能记到就说明是判断失灵。\n");
-            }
-            sb.append("\n怎么读：\n");
-            sb.append("· 事件总数一直是 0 → 无障碍服务没真正启用\n");
-            sb.append("· 只有本应用/输入法的事件，别的 App 一条都没有 → 系统拦截了本服务读取其他应用\n");
-            sb.append("　（MIUI/HyperOS：应用信息里打开「自启动」「后台弹出界面」，"
-                    + "或到无障碍页面找「已安装的服务/更多设置」放行）\n");
-            sb.append("· 有文本变化但\"节点为空\"在涨 → 靠兜底找回，正常\n");
-            sb.append("· 取到文本在涨但预览没变 → 界面刷新问题，不是采集问题\n");
-
-            final String text = sb.toString().trim();
-            ui.post(() -> setCard(resultView, "诊断", text));
-        }, "typelog-diag").start();
-    }
-
-    private void showSettings() {
+        private void showSettings() {
         String[] items = {
                 "后台保活：" + (Prefs.keepAlive(this) ? "开启（通知栏常驻）" : "关闭"),
                 "只记录有焦点的输入框：" + (Prefs.focusOnly(this) ? "开启" : "关闭"),
@@ -504,7 +425,7 @@ public class MainActivity extends Activity {
     // ══════════════════════════════════════════════ 页面切换
 
     private void setupNav() {
-        page1 = findViewById(R.id.page1);
+        pageRoot = findViewById(R.id.page1);
         page2 = findViewById(R.id.page2);
         appsRoot = findViewById(R.id.appsRoot);
         navRecordsText = findViewById(R.id.navRecordsText);
@@ -524,7 +445,7 @@ public class MainActivity extends Activity {
      */
     private void switchPage(int idx) {
         currentPage = idx;
-        page1.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
+        pageRoot.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
         page2.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
 
         int on = Color.parseColor("#FFFFFF");
@@ -857,29 +778,7 @@ public class MainActivity extends Activity {
                     android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
     }
-    private void setCard(TextView v, String title, String body) {
-        android.text.SpannableString ss = new android.text.SpannableString(title + "\n" + body);
-        ss.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), 0, title.length(),
-                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        v.setText(ss);
-    }
-
-    private TextView card(String title, String body) {
-        TextView t = new TextView(this);
-        t.setTextColor(Color.parseColor("#E8ECF3"));
-        t.setTextSize(13);
-        t.setPadding(dp(12), dp(10), dp(12), dp(10));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(8);
-        t.setLayoutParams(lp);
-        t.setBackgroundColor(Color.parseColor("#1B1F28"));
-        t.setTextIsSelectable(true);
-        setCard(t, title, body);
-        return t;
-    }
-
-    private Button button(String label) {
+            private Button button(String label) {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
@@ -897,130 +796,235 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ 刷新
 
-    private void refreshAll() {
-        refreshStatus();
-        refreshLive();
-        final Context ctx = this;
+    /** 顶部一行摘要。原来的四张卡片内容都并进了「诊断」弹窗，这里只留最关键的两项 */
+    private void refreshSummary() {
+        boolean on = isServiceEnabled();
+        final StringBuilder sb = new StringBuilder();
+        sb.append(on ? "● 已开启 · 记录中" : "○ 未开启（点「更多 → 设置」或去系统设置开启）");
         new Thread(() -> {
             final LogStore store = new LogStore(getFilesDir(), 0);
+            final String today = DAY.format(new Date());
+            final java.util.List<LogStore.Row> rows = store.readDay(today, 0);
+            int n = 0;
+            for (LogStore.Row r : rows) {
+                if (!r.text.isEmpty()) {
+                    n++;
+                }
+            }
+            final int count = n;
+            final long bytes = store.totalBytes();
+            final String lastApp = rows.isEmpty() ? "" : rows.get(rows.size() - 1).app;
+            ui.post(() -> {
+                sb.append(" · 今天 ").append(count).append(" 条");
+                if (bytes > 0) {
+                    sb.append(" · ").append(bytes < 1024 ? bytes + " B" : (bytes / 1024) + " KB");
+                }
+                if (!lastApp.isEmpty()) {
+                    sb.append(" · 最近 ").append(labelOf(lastApp));
+                }
+                if (summaryText != null) {
+                    summaryText.setText(sb.toString());
+                }
+            });
+        }, "typelog-summary").start();
+    }
+
+    /**
+     * 重新读取并填充列表。
+     *
+     * 保留滚动位置：事件到达时会自动刷新，若每次都跳回顶部，
+     * 用户正在看的内容就会被顶走（这正是"界面自己跳回统计区"的老问题）。
+     */
+    private void refreshList() {
+        if (adapter == null) {
+            return;
+        }
+        final int first = listRecords.getFirstVisiblePosition();
+        View v0 = listRecords.getChildAt(0);
+        final int top = v0 == null ? 0 : v0.getTop();
+        final boolean keep = listRecords.getCount() > 0;
+
+        new Thread(() -> {
+            LogStore store = new LogStore(getFilesDir(), 0);
             String today = DAY.format(new Date());
-            List<LogStore.Row> rows = store.readDay(today, 0);
-            final Map<String, Integer> counts = new LinkedHashMap<>();
-            final Map<String, Integer> chars = new LinkedHashMap<>();
-            int total = 0;
+            final java.util.List<Object> out = new java.util.ArrayList<>();
+
+            if (showRawRows) {
+                // 逐条视图：直接给原始版本（新的在前）
+                java.util.List<LogStore.Row> rows = store.readDay(today, 0);
+                for (int i = rows.size() - 1; i >= 0 && out.size() < 400; i--) {
+                    LogStore.Row r = rows.get(i);
+                    if ("send".equals(r.ev) || r.text.isEmpty()) {
+                        continue;
+                    }
+                    if (!query.isEmpty() && !r.text.contains(query)) {
+                        continue;
+                    }
+                    if (!appFilter.isEmpty() && !appFilter.contains(r.app)) {
+                        continue;
+                    }
+                    out.add(r);
+                }
+            } else {
+                java.util.List<LogStore.Row> rows = store.readDay(today, 0);
+                long from = rangeMinutes <= 0 ? 0
+                        : System.currentTimeMillis() - rangeMinutes * 60_000L;
+                java.util.List<LogStore.Row> kept = new java.util.ArrayList<>();
+                for (LogStore.Row r : rows) {
+                    if ("send".equals(r.ev)) {
+                        continue;
+                    }
+                    if (from > 0 && Burst.msOf(r.ts) < from) {
+                        continue;
+                    }
+                    if (!appFilter.isEmpty() && !appFilter.contains(r.app)) {
+                        continue;
+                    }
+                    if (!query.isEmpty() && !r.text.contains(query)) {
+                        continue;
+                    }
+                    kept.add(r);
+                }
+                java.util.List<Burst> bursts = Burst.groupNewestFirst(kept);
+                for (int i = 0; i < bursts.size() && out.size() < 400; i++) {
+                    out.add(bursts.get(i));
+                }
+            }
+
+            ui.post(() -> {
+                items.clear();
+                items.addAll(out);
+                adapter.notifyDataSetChanged();
+                if (keep) {
+                    listRecords.setSelectionFromTop(first, top);
+                }
+                if (items.isEmpty()) {
+                    summaryText.setText(query.isEmpty()
+                            ? "这个范围内还没有记录。去任意 App 打几个字就会出现在这里。"
+                            : "没有找到包含「" + query + "」的记录。");
+                }
+            });
+        }, "typelog-list").start();
+    }
+
+    private void doSearch() {
+        if (searchBox == null) {
+            return;
+        }
+        query = searchBox.getText().toString().trim();
+        if (query.isEmpty()) {
+            toast("已取消筛选");
+        }
+        refreshList();
+        if (!query.isEmpty()) {
+            toast("已筛选包含「" + query + "」的记录");
+        }
+    }
+
+        /** 诊断弹窗：原来页面上的状态/实时预览/统计/应用列表都放这里 */
+    private void showDiag() {
+        final android.widget.ScrollView sc = new android.widget.ScrollView(this);
+        final TextView tv = new TextView(this);
+        tv.setTextColor(COL_FG);
+        tv.setTextSize(13);
+        tv.setPadding(dp(16), dp(12), dp(16), dp(12));
+        tv.setLineSpacing(dp(3), 1f);
+        tv.setText("读取中…");
+        sc.addView(tv);
+
+        new Thread(() -> {
+            final LogStore store = new LogStore(getFilesDir(), 0);
+            final String today = DAY.format(new Date());
+            final Map<String, String> labels = store.labels(today);
+            final java.util.List<LogStore.Row> rows = store.readDay(today, 0);
+            final long bytes = store.totalBytes();
+
             int compCount = 0;
+            Map<String, Integer> counts = new LinkedHashMap<>();
+            Map<String, Integer> chars = new LinkedHashMap<>();
+            int total = 0;
             for (LogStore.Row r : rows) {
                 if (r.text.isEmpty()) {
                     continue;
+                }
+                total++;
+                if (r.comp) {
+                    compCount++;
                 }
                 Integer c = counts.get(r.app);
                 counts.put(r.app, c == null ? 1 : c + 1);
                 Integer mx = chars.get(r.app);
                 chars.put(r.app, mx == null ? r.chars : Math.max(mx, r.chars));
-                total++;
-                if (r.comp) {
-                    compCount++;
-                }
             }
-            Map<String, String> labels = store.labels(today);
-            long bytes = store.totalBytes();
-            final StringBuilder apps = new StringBuilder();
-            if (counts.isEmpty()) {
-                apps.append("今天还没有记录。");
+
+            final StringBuilder sb = new StringBuilder();
+            sb.append("── 采集状态 ──\n");
+            sb.append(isServiceEnabled() ? "● 已开启，正在记录\n" : "○ 未开启\n");
+            sb.append("本次会话落盘 ").append(TypelogService.written).append(" 条")
+              .append("（服务重启会归零，历史记录不会丢）\n");
+            sb.append("收到事件 ").append(TypelogService.evAll)
+              .append("（文本变化 ").append(TypelogService.evText).append("）\n");
+            sb.append("取到文本 ").append(TypelogService.evCaptured)
+              .append("　兜底找回 ").append(TypelogService.evTraverseHit)
+              .append("　跳过密码框 ").append(TypelogService.skippedPassword).append("\n");
+            sb.append("检测到点击「发送/搜索/发布」").append(TypelogService.sendBoundaries)
+              .append(" 次（消息分段依据）\n");
+            sb.append("跳过未聚焦的框 ").append(TypelogService.skippedNoFocus)
+              .append("　删除 ").append(TypelogService.skippedDelete)
+              .append("　噪音 ").append(TypelogService.skippedNoise).append("\n");
+
+            sb.append("\n── 实时预览（最近一次输入）──\n");
+            if (TextUtils.isEmpty(TypelogService.lastTs)) {
+                sb.append("还没有捕获到输入。\n");
             } else {
-                for (Map.Entry<String, Integer> e : counts.entrySet()) {
-                    String name = labels.get(e.getKey());
-                    apps.append("· ").append(TextUtils.isEmpty(name) ? e.getKey() : name)
-                        .append("（").append(e.getKey()).append("）  ")
-                        .append(e.getValue()).append(" 条，最长 ")
-                        .append(chars.get(e.getKey())).append(" 字\n");
-                }
+                String app = TextUtils.isEmpty(TypelogService.lastAppLabel)
+                        ? TypelogService.lastApp : TypelogService.lastAppLabel;
+                sb.append("时间：").append(TypelogService.lastTs).append("\n");
+                sb.append("应用：").append(TextUtils.isEmpty(app) ? "（未知）" : app).append("\n");
+                sb.append("输入框：").append(TypelogService.lastField).append("\n");
+                sb.append("当前字数：").append(TypelogService.lastText.length()).append("\n");
+                sb.append("—— 最近一次内容 ——\n").append(tail(TypelogService.lastText, 300)).append("\n");
             }
-            String lastSaved = "";
+
+            sb.append("\n── 统计（今天）──\n");
+            sb.append("落盘版本数：").append(total).append("\n");
+            sb.append("其中未上屏状态：").append(compCount).append(" 条\n");
+            sb.append("占用空间：").append(bytes < 1024 ? bytes + " 字节" : (bytes / 1024) + " KB")
+              .append("\n");
             if (!rows.isEmpty()) {
                 LogStore.Row last = rows.get(rows.size() - 1);
-                lastSaved = "最后一条（从磁盘读回）：\n"
-                        + last.ts.replace("T", " ").substring(0, 19)
-                        + "  " + last.minute + "  " + last.app + "  " + last.chars + " 字\n"
-                        + tail(last.text, 120) + "\n";
+                sb.append("最后一条：").append(last.ts.replace("T", " ").substring(0, 19))
+                  .append("　").append(last.app).append("　").append(last.chars).append(" 字\n")
+                  .append(tail(last.text, 120)).append("\n");
             }
-            final String stats = "今天落盘版本数：" + total + "（这是从磁盘读出来的）\n"
-                    + (total == 0
-                        ? "当前没有任何记录。若刚清空过，属正常；否则去任意 App 打字，几秒后这里会变。\n"
-                        : "")
-                    + "其中输入法未上屏状态：" + compCount + " 条（也存了）\n"
-                    + "已跳过密码框次数：" + TypelogService.skippedPassword + "\n"
-                    + "写入失败：" + TypelogService.errors
-                    + (TypelogService.lastError.isEmpty() ? "" : "（" + TypelogService.lastError + "）")
-                    + "\n占用空间：" + (bytes / 1024) + " KB\n\n"
-                    + lastSaved
-                    + "保存位置：应用私有目录（其他 App 读不到）";
+            sb.append("保存位置：应用私有目录（其他 App 读不到）\n");
+
+            sb.append("\n── 今天记录过的 App ──\n");
+            if (counts.isEmpty()) {
+                sb.append("还没有记录。\n");
+            } else {
+                for (Map.Entry<String, Integer> e : counts.entrySet()) {
+                    sb.append("· ").append(name(labels, e.getKey()))
+                      .append("（").append(e.getKey()).append("）  ")
+                      .append(e.getValue()).append(" 条，最长 ")
+                      .append(chars.get(e.getKey())).append(" 字\n");
+                }
+            }
+
             ui.post(() -> {
-                // 同样只在看得见时刷新：这两个卡片在"应用"页上方，
-                // 用户滚下去看记录时它们一变高就会把内容顶走
-                if (isFullyVisible(statsView)) {
-                    setCard(statsView, "统计", stats);
-                } else {
-                    skippedRefresh = true;
-                }
-                if (isFullyVisible(appsView)) {
-                    setCard(appsView, "今天记录过的 App", apps.toString().trim());
-                } else {
-                    skippedRefresh = true;
-                }
+                tv.setText(sb.toString().trim());
+                new android.app.AlertDialog.Builder(this)
+                        .setTitle("诊断")
+                        .setView(sc)
+                        .setPositiveButton("关闭", null)
+                        .show();
             });
-        }, "typelog-ui").start();
+        }, "typelog-diag").start();
     }
 
-    private void refreshStatus() {
-        boolean on = isServiceEnabled();
-        String head = on ? "● 已开启，正在记录" : "○ 未开启";
-        // 注意区分两套数字：这里是"本次会话"的计数器（服务重启会归零），
-        // 下面「统计」卡片是"从磁盘读出来的"历史总量。混在一起看容易误以为没记录。
-        String tail = on
-                ? "\n下面「统计」里的版本数才是磁盘上的历史总量。"
-                  + "\n每条记录的保存时机：你每敲一下 → 350 毫秒内落盘。"
-                  + "\n换 App、切后台、锁屏都不会中断。"
-                : "\n点下面的按钮，到系统的无障碍列表里打开「字迹留存」。"
-                  + "\n开启后本应用可以长期驻留，不会因为你划掉界面就停止。";
-        setCard(statusView, "采集状态", head + tail);
-    }
 
-    private void refreshLive() {
-        String app = TextUtils.isEmpty(TypelogService.lastAppLabel)
-                ? TypelogService.lastApp : TypelogService.lastAppLabel;
-        String body;
-        if (TextUtils.isEmpty(TypelogService.lastTs)) {
-            body = "还没有捕获到输入。开启服务后，去任意 App 打几个字试试。\n"
-                    + "（若确定打过字仍无显示，点下面「诊断」看事件计数）";
-        } else {
-            body = "时间：" + TypelogService.lastTs + "\n"
-                    + "应用：" + (TextUtils.isEmpty(app) ? "（未知）" : app) + "\n"
-                    + "输入框：" + TypelogService.lastField + "\n"
-                    + "当前字数：" + TypelogService.lastText.length() + "\n"
-                    + "—— 最近一次内容 ——\n"
-                    + tail(TypelogService.lastText, 200);
-        }
-        if (isFullyVisible(liveView)) {
-            setCard(liveView, "实时预览（最近一次输入）", body);
-        } else {
-            skippedRefresh = true;
-        }
-        if (isFullyVisible(statusView)) {
-            setCard(statusView, "采集状态",
-                (isServiceEnabled() ? "● 已开启，正在记录" : "○ 未开启")
-                + "\n本次会话落盘 " + TypelogService.written + " 条（服务重启会归零，历史记录不会丢）"
-                + "　收到事件 " + TypelogService.evAll
-                + "（文本变化 " + TypelogService.evText + "）"
-                + "\n取到文本 " + TypelogService.evCaptured
-                + "　兜底找回 " + TypelogService.evTraverseHit
-                + "　跳过密码框 " + TypelogService.skippedPassword);
-        } else {
-            skippedRefresh = true;
-        }
-    }
 
-    private static String tail(String s, int n) {
+            private static String tail(String s, int n) {
         if (s == null) {
             return "";
         }
@@ -1046,147 +1050,22 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void doSearch() {
-        final String q = searchBox.getText().toString().trim();
-        if (q.isEmpty()) {
-            toast("先输入关键词");
-            return;
-        }
-        setCard(resultView, "搜索结果", "搜索中…");
-        new Thread(() -> {
-            LogStore store = new LogStore(getFilesDir(), 0);
-            List<LogStore.Row> hits = new ArrayList<>();
-            for (String day : store.days()) {
-                store.search(day, q, 60, hits);
-                if (hits.size() >= 60) {
-                    break;
-                }
-            }
-            final StringBuilder sb = new StringBuilder();
-            if (hits.isEmpty()) {
-                sb.append("没找到包含「").append(q).append("」的记录。");
-            } else {
-                sb.append("找到 ").append(hits.size()).append(" 条（新的在前）\n\n");
-                for (LogStore.Row r : hits) {
-                    sb.append(r.ts.replace("T", " ")).append("  [").append(r.minute).append("]  ")
-                      .append(r.app).append("\n")
-                      .append(context(r.text, q)).append("\n\n");
-                }
-            }
-            ui.post(() -> setCard(resultView, "搜索结果", sb.toString().trim()));
-        }, "typelog-search").start();
-    }
-
-    /** 截取命中位置前后各 60 字，方便快速确认是不是要找的那段 */
-    private static String context(String text, String q) {
-        int i = text.indexOf(q);
-        if (i < 0) {
-            return tail(text, 200);
-        }
-        int from = Math.max(0, i - 60);
-        int to = Math.min(text.length(), i + q.length() + 60);
-        return (from > 0 ? "…" : "") + text.substring(from, to) + (to < text.length() ? "…" : "");
-    }
-
-    /**
+        /** 截取命中位置前后各 60 字，方便快速确认是不是要找的那段 */
+        /**
      * 看今天全部记录。
      *
      * 默认用「合并视图」：把逐字版本流合并成一段段完整的话 —— 存储层保留每次变化
      * （防丢就靠它），但给人看的时候不该显示 你→你好→你好呀 这种增量过程。
      * 想看原始增量时用下面的「逐条」开关。
      */
-    private void showToday() {
-        final String today = DAY.format(new Date());
-        setCard(resultView, "今天全部记录", "读取中…");
-        new Thread(() -> {
-            LogStore store = new LogStore(getFilesDir(), 0);
-            List<LogStore.Row> rows = store.readDay(today, 0);
-            Map<String, String> labels = store.labels(today);
-
-            StringBuilder sb = new StringBuilder();
-            if (rows.isEmpty()) {
-                sb.append("今天还没有记录。");
-            } else if (showRawRows) {
-                sb.append("【逐条视图】共 ").append(rows.size()).append(" 条原始版本（新→旧）\n")
-                  .append("这是每次文本变化都存一版的真相，用于排查；看内容请切回合并视图。\n\n");
-                int shown = 0;
-                for (int i = rows.size() - 1; i >= 0 && shown < 300; i--) {
-                    LogStore.Row r = rows.get(i);
-                    if ("send".equals(r.ev) || r.text.isEmpty()) {
-                        continue;   // 发送标记与空文本不是内容
-                    }
-                    shown++;
-                    sb.append(r.ts, 11, 19).append("  ").append(name(labels, r.app))
-                      .append("  ").append(r.chars).append(" 字")
-                      .append(r.comp ? "（未上屏）" : "").append("\n")
-                      .append(tail(r.text, 160)).append("\n\n");
-                }
-                if (rows.size() > shown) {
-                    sb.append("… 还有 ").append(rows.size() - shown).append(" 条，完整内容请导出\n");
-                }
-            } else {
-                List<Burst> bursts = Burst.groupNewestFirst(rows);
-                // 时间范围筛选
-                long from = rangeMinutes <= 0 ? 0
-                        : System.currentTimeMillis() - rangeMinutes * 60_000L;
-                List<Burst> kept = new java.util.ArrayList<>();
-                for (Burst b : bursts) {
-                    if (from > 0 && Burst.msOf(b.firstTs) < from) {
-                        continue;
-                    }
-                    if (!appFilter.isEmpty() && !appFilter.contains(b.app)) {
-                        continue;
-                    }
-                    kept.add(b);
-                }
-                boolean truncated = kept.size() > MAX_SEGMENTS;
-                if (truncated) {
-                    kept = new java.util.ArrayList<>(kept.subList(0, MAX_SEGMENTS));
-                }
-                final CharSequence rendered = BurstRenderer.render(
-                        kept, labels, rows.size(), truncated, MAX_SEGMENTS);
-                final String title = "今天全部记录（合并视图 · " + rangeLabel()
-                        + (appFilter.isEmpty() ? "" : " · 已筛选应用") + "）";
-                // 注意：不能"先 setText 正文、再只改标题" —— 那样会把正文覆盖掉。
-                // 标题与渲染结果必须一次设置。
-                ui.post(() -> {
-                    resultView.setText(mergeTitle(title, rendered));
-                    scrollToResults();
-                });
-                return;
-            }
-            // 走到这里只剩"逐条视图"分支（合并视图已在上面 return）
-            final String text = sb.toString().trim();
-            ui.post(() -> setCard(resultView, "今天全部记录（逐条视图）", text));
-        }, "typelog-today").start();
-    }
-
-    /** 把加粗标题与已渲染好的 Spannable 正文拼到一起（避免分两步设置导致正文被覆盖） */
-    private static CharSequence mergeTitle(String title, CharSequence body) {
-        android.text.SpannableStringBuilder ss = new android.text.SpannableStringBuilder();
-        int start = ss.length();
-        ss.append(title);
-        ss.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), start, ss.length(),
-                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        ss.append("\n");
-        ss.append(body);
-        return ss;
-    }
-
-    /**
+        /** 把加粗标题与已渲染好的 Spannable 正文拼到一起（避免分两步设置导致正文被覆盖） */
+        /**
      * 把"按钮 + 结果区"滚到可见。
      *
      * 结果可能很长，用户点完按钮后若停在别处会找不到内容；
      * 直接滚到结果卡片顶部，让"按钮在上、内容紧接其下"。
      */
-    private void scrollToResults() {
-        if (scrollRoot == null || resultView == null) {
-            return;
-        }
-        scrollRoot.post(() -> scrollRoot.smoothScrollTo(0, Math.max(0, resultView.getTop() - dp(56))));
-    }
-
-    /**
+        /**
      * 这个卡片此刻是否**完整可见**。
      *
      * 为什么要判断：每次事件都重写状态卡与实时预览的文字（实时预览最多 200 字），
@@ -1194,33 +1073,11 @@ public class MainActivity extends Activity {
      * 用户正看记录，界面却像"自己跳回统计区"。
      * 看不见的卡片刷新没有任何意义，只会制造跳动。
      */
-    private boolean isFullyVisible(View v) {
-        if (scrollRoot == null || v == null || v.getParent() == null) {
-            return false;
-        }
-        int y = scrollRoot.getScrollY();
-        int h = scrollRoot.getHeight();
-        return v.getTop() >= y && v.getBottom() <= y + h;
-    }
-
-    /** 有卡片因为不可见而跳过了刷新，滚回来时要补上 */
+        /** 有卡片因为不可见而跳过了刷新，滚回来时要补上 */
     private boolean skippedRefresh;
 
     /** 滚动时补刷：之前跳过的卡片若已可见，立刻更新，避免显示过期内容 */
-    private void onScrollRefresh() {
-        if (!skippedRefresh) {
-            return;
-        }
-        skippedRefresh = false;
-        refreshLive();
-        long now = System.currentTimeMillis();
-        if (now - lastStatsRefresh > STATS_REFRESH_MS) {
-            lastStatsRefresh = now;
-            refreshAll();
-        }
-    }
-
-    private String rangeLabel() {
+        private String rangeLabel() {
         if (rangeMinutes <= 0) {
             return "全部时间";
         }
@@ -1238,8 +1095,11 @@ public class MainActivity extends Activity {
                 .setTitle("记录的时间范围")
                 .setItems(labels, (d, which) -> {
                     rangeMinutes = opts[which];
+                    if (btnRange != null) {
+                        btnRange.setText(rangeLabel());
+                    }
                     toast("已切换到「" + labels[which] + "」");
-                    showToday();
+                    refreshList();
                 })
                 .show();
     }
@@ -1277,10 +1137,10 @@ public class MainActivity extends Activity {
                                 appFilter.remove(pkgs[which]);
                             }
                         })
-                        .setPositiveButton("应用", (d, w) -> showToday())
+                        .setPositiveButton("应用", (d, w) -> refreshList())
                         .setNeutralButton("清空筛选", (d, w) -> {
                             appFilter.clear();
-                            showToday();
+                            refreshList();
                         })
                         .show();
             });
@@ -1298,15 +1158,10 @@ public class MainActivity extends Activity {
             final Uri uri = Exporter.toPublicDownloads(this, store.root());
             ui.post(() -> {
                 if (uri == null) {
-                    toast("导出失败：无法写入下载目录");
-                    setCard(resultView, "导出结果",
-                            "导出失败。可以改用「分享 zip」发给微信/QQ。");
+                    toast("导出失败：无法写入下载目录，可以改用「分享 zip」");
                 } else {
                     String path = "下载/" + Exporter.PUBLIC_SUBDIR + "/DraftGuard-" + Exporter.stamp() + ".zip";
                     toast("已导出到 " + path);
-                    setCard(resultView, "导出结果",
-                            "已导出到公共下载目录：\n" + path + "\n\n"
-                            + "用文件管理器打开「下载 / DraftGuard」就能看到这个 zip。");
                 }
             });
         }, "typelog-export-pub").start();
@@ -1384,16 +1239,197 @@ public class MainActivity extends Activity {
                             Exporter.backupToPublicDownloads(this, s2.root(), "preclear");
                             s2.clearAll();
                             ui.post(() -> {
-                                setCard(resultView, "清除结果",
-                                        "已清除全部记录（" + total + " 条）。\n"
-                                        + "之后新打的字会重新开始记录。");
-                                refreshAll();
-                                toast("已清除 " + total + " 条记录");
+                                toast("已清除 " + total + " 条记录，之后新打的字会重新记录");
+                                refreshSummary();
+                                refreshList();
                             });
                         }, "typelog-clear").start();
                     })
                     .show());
         }, "typelog-count").start();
     }
-}
+/**
+     * 记录列表的适配器。
+     *
+     * 每行：应用图标 + 应用名 + 时间/字数/合并版本 + 正文。
+     * 用 ListView 的视图回收，几百条也不会卡。
+     */
+    private final class RecordAdapter extends android.widget.BaseAdapter {
 
+        @Override
+        public int getCount() {
+            return items.size();
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return items.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(int position, View convert, ViewGroup parent) {
+            LinearLayout row;
+            if (convert instanceof LinearLayout) {
+                row = (LinearLayout) convert;
+            } else {
+                row = buildRow();
+            }
+            bindRow(row, items.get(position));
+            return row;
+        }
+
+        /** 行结构：图标 | （应用名 + 元信息） / 正文 */
+        private LinearLayout buildRow() {
+            LinearLayout row = new LinearLayout(MainActivity.this);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setBackground(rounded(COL_CARD, 14));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(dp(12), dp(4), dp(12), dp(4));
+            row.setLayoutParams(lp);
+            row.setPadding(dp(12), dp(10), dp(12), dp(12));
+
+            LinearLayout head = new LinearLayout(MainActivity.this);
+            head.setOrientation(LinearLayout.HORIZONTAL);
+            head.setGravity(Gravity.CENTER_VERTICAL);
+
+            ImageView icon = new ImageView(MainActivity.this);
+            int sz = dp(30);
+            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(sz, sz);
+            ilp.rightMargin = dp(10);
+            icon.setLayoutParams(ilp);
+            icon.setTag("icon");
+            head.addView(icon);
+
+            LinearLayout col = new LinearLayout(MainActivity.this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setLayoutParams(new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView name = new TextView(MainActivity.this);
+            name.setTextColor(COL_FG);
+            name.setTextSize(14);
+            name.setTag("name");
+            col.addView(name);
+
+            TextView meta = new TextView(MainActivity.this);
+            meta.setTextColor(COL_DIM);
+            meta.setTextSize(11);
+            meta.setPadding(0, dp(2), 0, 0);
+            meta.setTag("meta");
+            col.addView(meta);
+
+            head.addView(col);
+            row.addView(head);
+
+            TextView body = new TextView(MainActivity.this);
+            body.setTextColor(COL_FG);
+            body.setTextSize(14);
+            body.setPadding(0, dp(8), 0, 0);
+            body.setLineSpacing(dp(3), 1f);
+            body.setTag("body");
+            row.addView(body);
+            return row;
+        }
+
+        private void bindRow(LinearLayout row, Object item) {
+            ImageView icon = row.findViewWithTag("icon");
+            TextView name = row.findViewWithTag("name");
+            TextView meta = row.findViewWithTag("meta");
+            TextView body = row.findViewWithTag("body");
+
+            String app;
+            String head;
+            String text;
+            if (item instanceof Burst) {
+                Burst b = (Burst) item;
+                app = b.app;
+                StringBuilder h = new StringBuilder();
+                h.append(b.firstTs, 11, 16);
+                if (!b.firstTs.substring(11, 16).equals(b.lastTs.substring(11, 16))) {
+                    h.append("–").append(b.lastTs, 11, 16);
+                }
+                h.append("　").append(b.text.length()).append(" 字");
+                if (b.versions > 1) {
+                    h.append("　合并 ").append(b.versions).append(" 版");
+                }
+                if (b.comp) {
+                    h.append("　未上屏");
+                }
+                head = h.toString();
+                text = b.text;
+            } else {
+                LogStore.Row r = (LogStore.Row) item;
+                app = r.app;
+                head = r.ts.substring(11, 19) + "　" + r.chars + " 字"
+                        + (r.comp ? "　未上屏" : "");
+                text = r.text;
+            }
+
+            name.setText(labelOf(app));
+            meta.setText(head);
+            body.setText(text);
+
+            android.graphics.drawable.Drawable d = iconCache.get(app);
+            if (d != null) {
+                icon.setImageDrawable(d);
+            } else {
+                icon.setImageDrawable(letterIcon(labelOf(app), app));
+                requestIcon(app);
+            }
+        }
+    }
+
+    private final java.util.Set<String> iconRequested = new java.util.HashSet<>();
+
+    /** 列表里第一次见到某个应用时，后台取一次它的图标 */
+    private void requestIcon(final String pkg) {
+        if (iconRequested.contains(pkg)) {
+            return;
+        }
+        iconRequested.add(pkg);
+        new Thread(() -> {
+            android.graphics.drawable.Drawable d = null;
+            try {
+                d = getPackageManager().getApplicationIcon(pkg);
+            } catch (Throwable ignored) {
+            }
+            synchronized (iconCache) {
+                iconCache.put(pkg, d);
+            }
+            ui.post(() -> {
+                if (adapter != null) {
+                    adapter.notifyDataSetChanged();
+                }
+            });
+        }, "typelog-icon").start();
+    }
+
+    private final java.util.Map<String, String> labelCache = new java.util.HashMap<>();
+
+    private String labelOf(String pkg) {
+        String v = labelCache.get(pkg);
+        if (v != null) {
+            return v;
+        }
+        // 先查磁盘索引里的应用名，取不到就退回包名
+        try {
+            LogStore store = new LogStore(getFilesDir(), 0);
+            Map<String, String> lb = store.labels(DAY.format(new Date()));
+            String hit = lb.get(pkg);
+            if (hit != null && !hit.isEmpty()) {
+                labelCache.put(pkg, hit);
+                return hit;
+            }
+        } catch (Throwable ignored) {
+        }
+        labelCache.put(pkg, pkg);
+        return pkg;
+    }
+
+}
