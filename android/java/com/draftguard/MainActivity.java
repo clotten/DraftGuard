@@ -62,6 +62,9 @@ public class MainActivity extends Activity {
     /** 看今天记录时是否显示原始逐条版本（默认合并成整段，见 Burst） */
     private boolean showRawRows = false;
 
+    /** 外层滚动容器：用于"看记录"后自动把按钮/结果区滚到可见 */
+    private android.widget.ScrollView scrollRoot;
+
     /**
      * 记录视图的时间范围（分钟）。0 = 不限。
      *
@@ -99,6 +102,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         root = findViewById(R.id.root);
+        scrollRoot = (android.widget.ScrollView) root.getParent();
         // 打开应用时确保保活服务在跑（用户可能在设置里开过又关了）
         if (Prefs.keepAlive(this)) {
             KeepAliveService.start(this);
@@ -185,7 +189,8 @@ public class MainActivity extends Activity {
         searchRow.addView(btnSearch);
 
         resultView = card("搜索结果", "输入关键词后点「搜」，会从今天往前找。");
-        root.addView(resultView);
+        // 注意：resultView 延后到所有按钮之后才 addView（见本方法末尾）——
+        // 否则结果一长，用户要翻过整屏文字才能点到「时间范围 / 筛选应用」等按钮。
 
         // 导出
         LinearLayout expRow2 = new LinearLayout(this);
@@ -241,6 +246,11 @@ public class MainActivity extends Activity {
         Button btnSettings = button("设置");
         btnSettings.setOnClickListener(v -> showSettings());
         setRow.addView(btnSettings);
+
+        // 结果卡片放在所有按钮**之后** addView。
+        // 滚动顺序变成：状态 → 统计 → 应用列表 → 搜索 → 按钮 → 结果，
+        // 想操作时按钮就在手边，不必先翻过整屏结果文字（用户反馈的痛点）。
+        root.addView(resultView);
     }
 
     /** 诊断面板：一眼看出"断在哪一环" */
@@ -745,7 +755,10 @@ public class MainActivity extends Activity {
                         + (appFilter.isEmpty() ? "" : " · 已筛选应用") + "）";
                 // 注意：不能"先 setText 正文、再只改标题" —— 那样会把正文覆盖掉。
                 // 标题与渲染结果必须一次设置。
-                ui.post(() -> resultView.setText(mergeTitle(title, rendered)));
+                ui.post(() -> {
+                    resultView.setText(mergeTitle(title, rendered));
+                    scrollToResults();
+                });
                 return;
             }
             // 走到这里只剩"逐条视图"分支（合并视图已在上面 return）
@@ -764,6 +777,19 @@ public class MainActivity extends Activity {
         ss.append("\n");
         ss.append(body);
         return ss;
+    }
+
+    /**
+     * 把"按钮 + 结果区"滚到可见。
+     *
+     * 结果可能很长，用户点完按钮后若停在别处会找不到内容；
+     * 直接滚到结果卡片顶部，让"按钮在上、内容紧接其下"。
+     */
+    private void scrollToResults() {
+        if (scrollRoot == null || resultView == null) {
+            return;
+        }
+        scrollRoot.post(() -> scrollRoot.smoothScrollTo(0, Math.max(0, resultView.getTop() - dp(56))));
     }
 
     private String rangeLabel() {
