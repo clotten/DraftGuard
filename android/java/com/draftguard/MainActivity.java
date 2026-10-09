@@ -283,16 +283,24 @@ public class MainActivity extends Activity {
     /** 「更多」：导出、分享、诊断、清除、设置都收在这里 */
         /** 诊断面板：一眼看出"断在哪一环" */
             private void chooseRetention() {
+        chooseRetention(null);
+    }
+
+    /** @param after 选完之后的回调（用于刷新设置列表里的当前值） */
+    private void chooseRetention(final Runnable after) {
         final int[] opts = {7, 30, 90, 365};
         String[] labels = new String[opts.length];
         for (int i = 0; i < opts.length; i++) {
             labels[i] = opts[i] + " 天";
         }
         new android.app.AlertDialog.Builder(this)
-                .setTitle("日志保留天数")
+                .setTitle("记录保留多少天")
                 .setItems(labels, (d, which) -> {
                     Prefs.setRetentionDays(this, opts[which]);
-                    toast("已设为 " + opts[which] + " 天（重启服务后清理）");
+                    toast("已设为 " + opts[which] + " 天");
+                    if (after != null) {
+                        after.run();
+                    }
                 })
                 .show();
     }
@@ -1112,6 +1120,17 @@ public class MainActivity extends Activity {
         diagBox.addView(collapsedHint("排查问题用。内容较长，往下滚即可。"));
         diagView = cardView("事件与存储", "读取中…");
         diagBox.addView(diagView);
+        // 展开后**立刻**填充。
+        // 踩过的坑：填充原先只写在 refreshTools() 里，而它仅在切页或事件到来时执行，
+        // 于是展开诊断后一直停在"读取中…"，要等下次有事件才显示。
+        new Thread(() -> {
+            final String d = diagText().toString();
+            ui.post(() -> {
+                if (diagView != null) {
+                    setCardText(diagView, "事件与存储", d);
+                }
+            });
+        }, "typelog-diag").start();
     }
 
     /** 一行开关：左标签，右 Switch */
@@ -1155,8 +1174,17 @@ public class MainActivity extends Activity {
         row.setLayoutParams(lp);
         row.setClickable(true);
         row.setOnClickListener(v -> {
-            applySetting(which);
-            buildSettingsBox();      // 值可能变了，重建这一块
+            // 最少字数与保留天数是**弹窗里选**，选完才异步生效 ——
+            // 若在这里立刻重建，拿到的是旧值（表现就是"改完不刷新，要再点一次才变"）。
+            // 所以把重建交给选择完成后的回调。
+            if (which == 4) {
+                chooseMinChars(() -> buildSettingsBox());
+            } else if (which == 5) {
+                chooseRetention(() -> buildSettingsBox());
+            } else {
+                applySetting(which);
+                buildSettingsBox();
+            }
         });
 
         TextView t = new TextView(this);
@@ -1332,14 +1360,8 @@ public class MainActivity extends Activity {
             });
         }, "typelog-tools").start();
 
-        new Thread(() -> {
-            final String d = diagText().toString();
-            ui.post(() -> {
-                if (diagView != null) {
-                    setCardText(diagView, "事件与存储", d);
-                }
-            });
-        }, "typelog-diag").start();
+        // 诊断区的填充放在 buildDiagBox() 里：它决定"是否展开、是否已创建视图"，
+        // 放在这里会出现"没展开也去读盘"以及"展开了却没人填"两种毛病。
     }
 
     /**
@@ -1601,6 +1623,11 @@ public class MainActivity extends Activity {
     }
 
     private void chooseMinChars() {
+        chooseMinChars(null);
+    }
+
+    /** @param after 选完之后的回调（用于刷新设置列表里的当前值） */
+    private void chooseMinChars(final Runnable after) {
         final int[] opts = {1, 2, 3, 5};
         String[] labels = new String[opts.length];
         for (int i = 0; i < opts.length; i++) {
@@ -1611,6 +1638,9 @@ public class MainActivity extends Activity {
                 .setItems(labels, (d, which) -> {
                     Prefs.setMinChars(this, opts[which]);
                     toast("已设为 " + opts[which] + " 字");
+                    if (after != null) {
+                        after.run();
+                    }
                 })
                 .show();
     }
