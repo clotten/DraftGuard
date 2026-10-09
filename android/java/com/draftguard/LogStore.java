@@ -264,6 +264,89 @@ final class LogStore {
         return out;
     }
 
+    /** 单个应用的汇总（供"应用"页面显示图标 + 名字 + 条数） */
+    static final class AppStat {
+        String app = "";
+        String label = "";
+        int rows;
+        long bytes;
+        /** 最近一条记录的时间（ISO 字符串，可直接比较大小） */
+        String lastTs = "";
+        /** 出现过该应用的不同天数 */
+        int days;
+
+        String display() {
+            return (label == null || label.isEmpty()) ? app : label;
+        }
+    }
+
+    /**
+     * 汇总所有日期下各应用的记录量。
+     *
+     * 刻意**只数行、不解析 JSON** —— 应用可能累积几十天、上千条，
+     * 若逐条解析会很慢，而这里只需要"条数 / 体积 / 最近时间"。
+     *
+     * @param maxDays 最多回看多少天（0 = 全部）
+     */
+    Map<String, AppStat> appsSummary(int maxDays) {
+        Map<String, AppStat> out = new LinkedHashMap<>();
+        List<String> ds = days();
+        int n = 0;
+        for (String day : ds) {
+            if (maxDays > 0 && n >= maxDays) {
+                break;
+            }
+            n++;
+            File dir = new File(root, day);
+            File[] files = dir.listFiles();
+            if (files == null) {
+                continue;
+            }
+            Map<String, String> idx = dayIndex(day);
+            for (File f : files) {
+                String name = f.getName();
+                if (!name.endsWith(".jsonl")) {
+                    continue;
+                }
+                String app = name.substring(0, name.length() - ".jsonl".length());
+                AppStat st = out.get(app);
+                if (st == null) {
+                    st = new AppStat();
+                    st.app = app;
+                    out.put(app, st);
+                }
+                st.days++;
+                st.bytes += f.length();
+                // 数行 + 取最后一条的时间（顺序读一遍，不做 JSON 解析）
+                String last = null;
+                int cnt = 0;
+                try (BufferedReader br = new BufferedReader(
+                        new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        if (!line.isEmpty()) {
+                            cnt++;
+                            last = line;
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+                st.rows += cnt;
+                if (last != null) {
+                    String ts = group(TS, last);
+                    if (ts.compareTo(st.lastTs) > 0) {
+                        st.lastTs = ts;
+                    }
+                }
+                String lb = idx.get(app);
+                if (lb != null && !lb.isEmpty() && (st.label == null || st.label.isEmpty())) {
+                    st.label = lb;
+                }
+            }
+        }
+        return out;
+    }
+
     List<Row> readDay(String day, int max) {
         List<Row> out = new ArrayList<>();
         File dir = new File(root, day);

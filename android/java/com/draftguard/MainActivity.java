@@ -19,6 +19,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -65,6 +66,20 @@ public class MainActivity extends Activity {
     /** 外层滚动容器：用于"看记录"后自动把按钮/结果区滚到可见 */
     private android.widget.ScrollView scrollRoot;
 
+    // ── 导航与第二页（应用列表）────────────────────────────────
+    private android.widget.ScrollView page1, page2;
+    private LinearLayout appsRoot;
+    private TextView navRecordsText, navAppsText;
+    private View navRecordsBar, navAppsBar;
+    private int currentPage = 0;
+
+    /** 应用图标缓存：null 表示"试过但拿不到"，避免反复请求 */
+    private final java.util.Map<String, android.graphics.drawable.Drawable> iconCache =
+            new java.util.HashMap<>();
+
+    /** 第二页当前是否处于"某个应用的详情"状态（非 null 时显示详情） */
+    private String detailApp = null;
+
     /**
      * 记录视图的时间范围（分钟）。0 = 不限。
      *
@@ -103,6 +118,7 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
         root = findViewById(R.id.root);
         scrollRoot = (android.widget.ScrollView) root.getParent();
+        setupNav();
         // 打开应用时确保保活服务在跑（用户可能在设置里开过又关了）
         if (Prefs.keepAlive(this)) {
             KeepAliveService.start(this);
@@ -485,6 +501,362 @@ public class MainActivity extends Activity {
     }
 
     /** 让卡片的标题行加粗，正文保持常规 */
+    // ══════════════════════════════════════════════ 页面切换
+
+    private void setupNav() {
+        page1 = findViewById(R.id.page1);
+        page2 = findViewById(R.id.page2);
+        appsRoot = findViewById(R.id.appsRoot);
+        navRecordsText = findViewById(R.id.navRecordsText);
+        navAppsText = findViewById(R.id.navAppsText);
+        navRecordsBar = findViewById(R.id.navRecordsBar);
+        navAppsBar = findViewById(R.id.navAppsBar);
+        findViewById(R.id.tabRecords).setOnClickListener(v -> switchPage(0));
+        findViewById(R.id.tabApps).setOnClickListener(v -> switchPage(1));
+        switchPage(0);
+    }
+
+    /**
+     * 切换页面。
+     *
+     * 这里用"两个 ScrollView 互斥显示"，而不是 Fragment ——
+     * 项目一直不用 androidx，Fragment 会引入依赖；页面只有两个，隐藏/显示足够。
+     */
+    private void switchPage(int idx) {
+        currentPage = idx;
+        page1.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
+        page2.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
+
+        int on = Color.parseColor("#FFFFFF");
+        int off = Color.parseColor("#8B95A7");
+        int barOn = Color.parseColor("#5B9DFF");
+        int barOff = Color.parseColor("#1A1D26");
+        navRecordsText.setTextColor(idx == 0 ? on : off);
+        navAppsText.setTextColor(idx == 1 ? on : off);
+        navRecordsText.setTypeface(null, idx == 0 ? Typeface.BOLD : Typeface.NORMAL);
+        navAppsText.setTypeface(null, idx == 1 ? Typeface.BOLD : Typeface.NORMAL);
+        navRecordsBar.setBackgroundColor(idx == 0 ? barOn : barOff);
+        navAppsBar.setBackgroundColor(idx == 1 ? barOn : barOff);
+
+        if (idx == 1) {
+            refreshAppsPage();
+        }
+    }
+
+    // ══════════════════════════════════════════════ 第二页：应用列表
+
+    private void refreshAppsPage() {
+        appsRoot.removeAllViews();
+        detailApp = null;
+        appsRoot.addView(heading("应用"));
+        TextView hint = new TextView(this);
+        hint.setTextColor(Color.parseColor("#8B95A7"));
+        hint.setTextSize(12);
+        hint.setPadding(dp(2), 0, 0, dp(10));
+        hint.setText("点任意一个应用，看它里面的打字记录");
+        appsRoot.addView(hint);
+
+        final TextView loading = new TextView(this);
+        loading.setTextColor(Color.parseColor("#8B95A7"));
+        loading.setTextSize(13);
+        loading.setPadding(dp(2), dp(8), 0, 0);
+        loading.setText("统计中…");
+        appsRoot.addView(loading);
+
+        new Thread(() -> {
+            LogStore store = new LogStore(getFilesDir(), 0);
+            // 全部历史（不限制天数）：用户要求"所有记录过的应用"
+            final java.util.Map<String, LogStore.AppStat> stats = store.appsSummary(0);
+            // 按最近使用时间倒序
+            java.util.List<LogStore.AppStat> list =
+                    new java.util.ArrayList<>(stats.values());
+            java.util.Collections.sort(list, (x, y) -> y.lastTs.compareTo(x.lastTs));
+
+            ui.post(() -> {
+                appsRoot.removeView(loading);
+                if (list.isEmpty()) {
+                    TextView empty = new TextView(this);
+                    empty.setTextColor(Color.parseColor("#8B95A7"));
+                    empty.setTextSize(13);
+                    empty.setText("还没有任何记录。去任意 App 打几个字，这里就会出现它。");
+                    appsRoot.addView(empty);
+                    return;
+                }
+                for (LogStore.AppStat st : list) {
+                    appsRoot.addView(appRow(st));
+                }
+                loadIcons(list);
+            });
+        }, "typelog-apps").start();
+    }
+
+    private TextView heading(String text) {
+        TextView t = new TextView(this);
+        t.setTextColor(Color.parseColor("#E8ECF3"));
+        t.setTextSize(17);
+        t.setTypeface(null, Typeface.BOLD);
+        t.setPadding(dp(2), dp(2), 0, dp(6));
+        t.setText(text);
+        return t;
+    }
+
+    /** 一行：图标 + 名字 + 条数（右侧） */
+    private View appRow(final LogStore.AppStat st) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        row.setBackgroundColor(Color.parseColor("#1A1D26"));
+        row.setPadding(dp(10), dp(10), dp(10), dp(10));
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rlp.bottomMargin = dp(8);
+        row.setLayoutParams(rlp);
+        row.setClickable(true);
+        row.setOnClickListener(v -> showAppDetail(st));
+
+        ImageView icon = new ImageView(this);
+        int sz = dp(42);
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(sz, sz);
+        ilp.rightMargin = dp(12);
+        icon.setLayoutParams(ilp);
+        android.graphics.drawable.Drawable d = iconCache.get(st.app);
+        icon.setImageDrawable(d != null ? d : letterIcon(st.display(), st.app));
+        icon.setTag(st.app);
+        row.addView(icon);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView name = new TextView(this);
+        name.setTextColor(Color.parseColor("#E8ECF3"));
+        name.setTextSize(15);
+        name.setText(st.display());
+        col.addView(name);
+
+        TextView meta = new TextView(this);
+        meta.setTextColor(Color.parseColor("#8B95A7"));
+        meta.setTextSize(11);
+        meta.setPadding(0, dp(3), 0, 0);
+        StringBuilder m = new StringBuilder();
+        m.append(st.app);
+        if (st.days > 1) {
+            m.append("　").append(st.days).append(" 天");
+        }
+        if (st.lastTs.length() >= 16) {
+            m.append("　最近 ").append(st.lastTs, 11, 16);
+        }
+        meta.setText(m.toString());
+        col.addView(meta);
+        row.addView(col);
+
+        TextView count = new TextView(this);
+        count.setTextColor(Color.parseColor("#5B9DFF"));
+        count.setTextSize(13);
+        count.setText(st.rows + " 条");
+        row.addView(count);
+
+        return row;
+    }
+
+    /**
+     * 拿不到真实图标时的兜底：用应用名首字画一个带底色的圆角方块。
+     * 比统一显示一个通用图标更容易分辨。
+     */
+    private android.graphics.drawable.Drawable letterIcon(String label, String pkg) {
+        int sz = dp(42);
+        android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(
+                sz, sz, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        // 底色由包名散列决定，同一应用每次颜色一致
+        int[] palette = {0xFF3A6EA5, 0xFF4C8C6B, 0xFF9A5BA8, 0xFFB07340,
+                         0xFF5B6FA8, 0xFF8C5B5B, 0xFF4E7C8C, 0xFF7A6BA8};
+        p.setColor(palette[Math.abs(pkg.hashCode()) % palette.length]);
+        float r = sz * 0.24f;
+        c.drawRoundRect(new android.graphics.RectF(0, 0, sz, sz), r, r, p);
+
+        p.setColor(0xFFFFFFFF);
+        p.setTextSize(sz * 0.44f);
+        p.setTextAlign(android.graphics.Paint.Align.CENTER);
+        String ch = (label == null || label.isEmpty()) ? "?" : label.substring(0, 1);
+        float baseline = sz / 2f - (p.descent() + p.ascent()) / 2f;
+        c.drawText(ch, sz / 2f, baseline, p);
+        return new android.graphics.drawable.BitmapDrawable(getResources(), bmp);
+    }
+
+    /** 后台批量取应用图标，取到后回填到列表上的 ImageView */
+    private void loadIcons(java.util.List<LogStore.AppStat> stats) {
+        new Thread(() -> {
+            android.content.pm.PackageManager pm = getPackageManager();
+            for (LogStore.AppStat st : stats) {
+                if (iconCache.containsKey(st.app)) {
+                    continue;
+                }
+                android.graphics.drawable.Drawable d = null;
+                try {
+                    // 清单里已声明 MAIN/LAUNCHER 的 <queries>，所以这里能看到
+                    // 有启动图标的第三方应用（安卓 11+ 的包可见性限制）
+                    d = pm.getApplicationIcon(st.app);
+                } catch (Throwable ignored) {
+                    // 取不到就走 letterIcon 兜底
+                }
+                synchronized (iconCache) {
+                    iconCache.put(st.app, d);
+                }
+            }
+            ui.post(() -> {
+                // 回填：只更新图标还是兜底字的行
+                for (int i = 0; i < appsRoot.getChildCount(); i++) {
+                    View v = appsRoot.getChildAt(i);
+                    if (!(v instanceof LinearLayout)) {
+                        continue;
+                    }
+                    View first = ((LinearLayout) v).getChildAt(0);
+                    if (!(first instanceof ImageView)) {
+                        continue;
+                    }
+                    Object tag = first.getTag();
+                    if (tag == null) {
+                        continue;
+                    }
+                    android.graphics.drawable.Drawable d = iconCache.get(tag.toString());
+                    if (d != null) {
+                        ((ImageView) first).setImageDrawable(d);
+                    }
+                }
+            });
+        }, "typelog-icons").start();
+    }
+
+    // ══════════════════════════════════════════════ 应用详情（第二页内）
+
+    /** 显示某个应用的全部记录，按天分组，带返回按钮 */
+    private void showAppDetail(final LogStore.AppStat st) {
+        detailApp = st.app;
+        appsRoot.removeAllViews();
+
+        // 顶部：返回 + 标题
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        bar.setPadding(0, 0, 0, dp(10));
+
+        Button back = button("← 返回");
+        back.setOnClickListener(v -> refreshAppsPage());
+        bar.addView(back);
+
+        LinearLayout titleCol = new LinearLayout(this);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tlp.leftMargin = dp(12);
+        titleCol.setLayoutParams(tlp);
+
+        TextView name = new TextView(this);
+        name.setTextColor(Color.parseColor("#E8ECF3"));
+        name.setTextSize(17);
+        name.setTypeface(null, Typeface.BOLD);
+        name.setText(st.display());
+        titleCol.addView(name);
+
+        TextView sub = new TextView(this);
+        sub.setTextColor(Color.parseColor("#8B95A7"));
+        sub.setTextSize(11);
+        sub.setPadding(0, dp(2), 0, 0);
+        sub.setText(st.rows + " 条　" + st.app);
+        titleCol.addView(sub);
+        bar.addView(titleCol);
+        appsRoot.addView(bar);
+
+        final TextView body = new TextView(this);
+        body.setTextColor(Color.parseColor("#E8ECF3"));
+        body.setTextSize(13);
+        body.setPadding(dp(12), dp(10), dp(12), dp(10));
+        body.setBackgroundColor(Color.parseColor("#1A1D26"));
+        body.setTextIsSelectable(true);
+        body.setText("读取中…");
+        appsRoot.addView(body);
+
+        new Thread(() -> {
+            LogStore store = new LogStore(getFilesDir(), 0);
+            java.util.List<String> days = store.days();
+            final android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+            int totalRows = 0;
+            int totalSeg = 0;
+            boolean firstDay = true;
+            // 天从新到旧（days() 已倒序）
+            for (String day : days) {
+                java.util.List<LogStore.Row> rows = store.readDay(day, 0);
+                java.util.List<LogStore.Row> mine = new java.util.ArrayList<>();
+                for (LogStore.Row r : rows) {
+                    if (st.app.equals(r.app)) {
+                        mine.add(r);
+                    }
+                }
+                if (mine.isEmpty()) {
+                    continue;
+                }
+                totalRows += mine.size();
+                java.util.List<Burst> bursts = Burst.groupNewestFirst(mine);
+                totalSeg += bursts.size();
+                if (!firstDay) {
+                    sb.append("\n");
+                }
+                firstDay = false;
+                span(sb, "──── " + day + "　" + bursts.size() + " 段 ────\n",
+                        Color.parseColor("#8B95A7"), 0.9f, true);
+                for (Burst b : bursts) {
+                    sb.append("\n");
+                    StringBuilder h = new StringBuilder();
+                    h.append(b.firstTs, 11, 16);
+                    if (!b.firstTs.substring(11, 16).equals(b.lastTs.substring(11, 16))) {
+                        h.append("–").append(b.lastTs, 11, 16);
+                    }
+                    h.append("　").append(b.text.length()).append(" 字");
+                    if (b.versions > 1) {
+                        h.append("　合并 ").append(b.versions).append(" 版");
+                    }
+                    span(sb, h.toString() + "\n", Color.parseColor("#5B9DFF"), 0.85f, false);
+                    span(sb, b.text + "\n", Color.parseColor("#E8ECF3"), 1.0f, false);
+                }
+            }
+            final int fRows = totalRows;
+            final int fSeg = totalSeg;
+            ui.post(() -> {
+                if (sb.length() == 0) {
+                    body.setText("这个应用还没有可显示的内容。");
+                } else {
+                    android.text.SpannableStringBuilder head = new android.text.SpannableStringBuilder();
+                    span(head, "共 " + fSeg + " 段　原始 " + fRows + " 个版本（全部时间）\n",
+                            Color.parseColor("#8B95A7"), 0.9f, false);
+                    span(head, "同一次连续输入只显示最后成型的整段。\n\n",
+                            Color.parseColor("#8B95A7"), 0.9f, false);
+                    head.append(sb);
+                    body.setText(head);
+                }
+                sub.setText(fRows + " 条　" + st.app);
+            });
+        }, "typelog-appdetail").start();
+    }
+
+    private static void span(android.text.SpannableStringBuilder sb, String text,
+                             int color, float scale, boolean bold) {
+        int start = sb.length();
+        sb.append(text);
+        int end = sb.length();
+        sb.setSpan(new android.text.style.ForegroundColorSpan(color), start, end,
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        if (scale != 1f) {
+            sb.setSpan(new android.text.style.RelativeSizeSpan(scale), start, end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        if (bold) {
+            sb.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), start, end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+    }
     private void setCard(TextView v, String title, String body) {
         android.text.SpannableString ss = new android.text.SpannableString(title + "\n" + body);
         ss.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), 0, title.length(),

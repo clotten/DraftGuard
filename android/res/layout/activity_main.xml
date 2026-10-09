@@ -1,14 +1,115 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  外层结构：导航栏固定在顶部，下方是一个"页面容器"。
+
+  为什么要这样改：原来根布局就是一个 ScrollView，内容一长，
+  顶部的任何东西都会被滚走。现在导航栏独立于滚动区域之外，
+  两个页面各自滚动、互不影响。
+
+  注意：page1 里的 @id/root 保持原名不变 —— MainActivity 里所有
+  root.addView(...) 的代码都不用动，现有页面在视觉上完全保持原样。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#12141A"
-    android:fillViewport="true">
+    android:orientation="vertical"
+    android:background="#12141A">
 
+    <!-- 顶部导航栏：每个标签 = 文字 + 自己的下划线（选中时点亮） -->
     <LinearLayout
-        android:id="@+id/root"
+        android:id="@+id/navBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="14dp" />
-</ScrollView>
+        android:orientation="horizontal"
+        android:background="#1A1D26"
+        android:elevation="4dp">
+
+        <LinearLayout
+            android:id="@+id/tabRecords"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/navRecordsText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:paddingTop="14dp"
+                android:paddingBottom="12dp"
+                android:text="记录"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <View
+                android:id="@+id/navRecordsBar"
+                android:layout_width="match_parent"
+                android:layout_height="2dp"
+                android:background="#5B9DFF" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/tabApps"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/navAppsText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:paddingTop="14dp"
+                android:paddingBottom="12dp"
+                android:text="应用"
+                android:textColor="#8B95A7"
+                android:textSize="15sp" />
+
+            <View
+                android:id="@+id/navAppsBar"
+                android:layout_width="match_parent"
+                android:layout_height="2dp"
+                android:background="#1A1D26" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <!-- 页面 1：现有页面，内容与原来完全一致 -->
+        <ScrollView
+            android:id="@+id/page1"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:id="@+id/root"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp" />
+        </ScrollView>
+
+        <!-- 页面 2：应用列表（图标 + 名字 + 条数），点进去看该应用记录 -->
+        <ScrollView
+            android:id="@+id/page2"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/appsRoot"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp" />
+        </ScrollView>
+    </FrameLayout>
+</LinearLayout>
