@@ -82,11 +82,28 @@ Invoke-Tool $Aapt2 @('compile', '--dir', (Join-Path $appDir 'res'), '-o', $resOu
 Step 'aapt2 link：生成资源表与基础 APK'
 $baseApk = Join-Path $build 'base.apk'
 $genDir  = Join-Path $build 'gen'
+
+# 版本号必须写进清单再用 aapt2 link。
+#
+# 踩过的坑：本机 aapt2（build-tools 36.1.0）**静默忽略** --version-code / --version-name，
+# 传了也不报错，产出的 APK 一直是清单里写死的 1 / 2.0.0。
+# 结果：所有版本的 versionCode 都是 1，升级时系统看到"版本没变"，
+# 也让人误以为装的是最新版（实测排查花了很久才发现）。
+# 所以改成：把清单里的版本号替换后链接，并在最后校验产物里的实际版本。
+$manifestSrc = Join-Path $appDir 'AndroidManifest.xml'
+$manifestTmp = Join-Path $build 'AndroidManifest.build.xml'
+$manifestText = [IO.File]::ReadAllText($manifestSrc, [Text.Encoding]::UTF8)
+$manifestText = [regex]::Replace($manifestText,
+    'android:versionCode="\d+"', "android:versionCode=`"$VersionCode`"")
+$manifestText = [regex]::Replace($manifestText,
+    'android:versionName="[^"]*"', "android:versionName=`"$VersionName`"")
+[IO.File]::WriteAllText($manifestTmp, $manifestText, (New-Object Text.UTF8Encoding($false)))
+
 Invoke-Tool $Aapt2 @(
     'link',
     '-o', $baseApk,
     '-I', $androidJar,
-    '--manifest', (Join-Path $appDir 'AndroidManifest.xml'),
+    '--manifest', $manifestTmp,
     '--java', $genDir,
     '--min-sdk-version', '26',
     '--target-sdk-version', '33',
@@ -95,6 +112,12 @@ Invoke-Tool $Aapt2 @(
     '--auto-add-overlay',
     $resOut
 ) $errLog
+
+# 校验：确认版本真的写进去了（防止又静默失效）
+$badging = & $Aapt2 dump badging $baseApk 2>&1 | Select-String -Pattern '^package:' | Select-Object -First 1
+if ($badging -and $badging.Line -notmatch "versionCode='$VersionCode'") {
+    throw "版本号未写入 APK（期望 $VersionCode）：$($badging.Line)"
+}
 
 # ---------------------------------------------------------------- 2. Java → class
 Step 'javac：编译 Java 源码'

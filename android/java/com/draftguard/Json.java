@@ -90,6 +90,12 @@ final class Json {
         kv(sb, "bucket", r.day + " " + r.minute, false);
         kv(sb, "app", r.app, false);
         kv(sb, "ev", r.ev, false);
+        // 输入框标识必须存盘：分段（Burst）要按"同一输入框"归组，
+        // 如果只在渲染时重新计算，控件树一变标识就变，同一段话会被拆成多段
+        // （实测豆包：间隔 1.7 分钟的续写被分成两段）。存下来后分段完全可复现。
+        if (r.field != null && !r.field.isEmpty()) {
+            kv(sb, "field", r.field, false);
+        }
         num(sb, "chars", r.text.length());
         num(sb, "delta", r.delta);
         sb.append(",\"comp\":").append(r.comp);

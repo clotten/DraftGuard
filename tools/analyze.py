@@ -62,7 +62,10 @@ def is_full_rewrite(a: str, b: str) -> bool:
 
 
 def mergeable(cur: dict, nxt: dict) -> bool:
-    if cur["app"] != nxt["app"] or cur["field"] != nxt["field"]:
+    if cur["app"] != nxt["app"]:
+        return False
+    # 空 field（旧记录）与任何标识视为同一输入框
+    if cur["field"] and nxt["field"] and cur["field"] != nxt["field"]:
         return False
     gap = ms_of(nxt["ts"]) - ms_of(cur["ts"])
     # 接着写未完成草稿：允许很长的间隔（与 Burst.java 保持一致）

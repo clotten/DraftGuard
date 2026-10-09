@@ -186,7 +186,12 @@ final class Burst {
     }
 
     private static boolean mergeable(Burst cur, Burst next) {
-        if (!cur.app.equals(next.app) || !cur.field.equals(next.field)) {
+        if (!cur.app.equals(next.app)) {
+            return false;
+        }
+        // 输入框标识：空表示"旧记录没存这个字段"，与任何标识都视为同一输入框。
+        // 否则加入 field 存盘后，会与改造前的历史记录无法合并。
+        if (!cur.field.isEmpty() && !next.field.isEmpty() && !cur.field.equals(next.field)) {
             return false;
         }
         // 间隔判据分两种情况 —— 这是用户反馈"切出去几分钟回来接着打就断成两段"后的修正。
