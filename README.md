@@ -176,6 +176,7 @@ One JSON object per line, one line per version:
   each as symptom → root cause → fix, plus the Android/MIUI pitfalls behind them
 - [`docs/LESSONS.md`](docs/LESSONS.md) — one-page digest of the lessons worth remembering
 - [`docs/UI.md`](docs/UI.md) — interface design and the UI pitfalls hit along the way
+- [docs/KASPERSKY-EXCLUSIONS.md](docs/KASPERSKY-EXCLUSIONS.md) — why an AV flags this project's tooling, and the exact exclusions to add
 - [`docs/SEGMENTATION.md`](docs/SEGMENTATION.md) — the complete segmentation rules: thresholds, decision order, and the user report behind each one — why accessibility, why snapshots, why per-minute
 - [`docs/RETRO.md`](docs/RETRO.md) — a development retrospective: what worked, what repeatedly went wrong, and where the time actually went
 - [`docs/REMOTE-DEBUG.md`](docs/REMOTE-DEBUG.md) — connecting over ADB wireless debugging, plus the in-app diagnostic probe that makes remote triage possible
