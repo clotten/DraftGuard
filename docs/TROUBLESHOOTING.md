@@ -490,3 +490,61 @@ that both callers share.
 After the diagnostic content moved into `diagText()`, `tools/check_diag_fields.py` still looked at
 the old `showDiag()` and reported five fields as missing while they were plainly on screen.
 Widen the check when the content moves, or the guard itself becomes noise.
+
+### 13.7 Diagnostics that "explain" instead of "assert"
+
+Two of the app's own messages sent the user looking in the wrong place:
+
+- The raw-event section printed "（诊断日志未开启）" whenever its buffer was empty. But empty has
+  three different causes — the service is not connected, the debug switch is off, or no event has
+  arrived yet — and the service was the actual one. It now prints the switch state **and** the
+  service state, then says which of the three applies.
+- The status card once read "已开启，正在记录" while the service was disabled, because
+  "listed in `enabled_accessibility_services`" was treated as "running" (MIUI keeps the list entry
+  after disabling). It now distinguishes not-enabled / still-connecting / enabled-but-dead / healthy.
+
+**Rule:** a diagnostic line should state the **evidence**, not a conclusion. When it only reports a
+conclusion, every wrong conclusion costs a round trip with the user. The tools page therefore also
+prints a `状态探测依据` line with the raw inputs behind the verdict.
+
+### 13.8 Java gotcha: 参数遮蔽字段（a parameter silently shadowing a field）
+
+`handleText(String pkg, ..., String field)` had a `field` parameter while the class also had a
+`field` field; the assignment inside the method wrote the parameter, so the field stayed empty.
+Nothing failed to compile — the value was simply never stored. Renamed the parameter and set the
+field explicitly. Worth remembering because the symptom looked like "storage is broken".
+
+---
+
+## 14. Is the accessibility service really running?
+
+The app must answer this correctly — the answer decides whether the user's typing is being saved.
+Three attempts were needed:
+
+| attempt | check | why it failed |
+|---|---|---|
+| 1 | is our component in `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES`? | MIUI keeps the list entry after disabling the service, so the app reported "recording" while nothing was saved |
+| 2 | the same, plus `Settings.Secure.ACCESSIBILITY_ENABLED` treated as a "master switch" | on this MIUI build that value is a *consequence* of having a service enabled, not a control the user can find — the app told the user to switch on something that does not exist |
+| 3 | **`AccessibilityManager`** — `isEnabled()` + `getEnabledAccessibilityServiceList()` | current approach: the API the system actually offers to apps |
+
+The final logic has four states, and they must not be conflated:
+
+| state | meaning | shown to the user |
+|---|---|---|
+| connected | `TypelogService.running` | "● 已开启，正在记录" |
+| connecting | listed, but < 10 s since launch | "◌ 正在连接无障碍服务…" |
+| enabled-but-dead | listed yet not connected after the grace period | warning + "turn DraftGuard off and on again" |
+| not enabled | not listed at all | "○ 未开启" + how to open it |
+
+**The grace period matters.** After an install the system may rebind within a few seconds; the status
+card is refreshed at ~10 s, but the blocking dialog only appears at ~22 s, so a merely slow rebind
+does not raise a false alarm.
+
+**And print the evidence, not just the verdict.** The diagnostics panel shows a line such as:
+
+```
+状态探测依据：服务在已启用列表=是　secure设置里有=是　服务已连接=否　判定=被系统停用
+```
+
+so a wrong verdict can be traced to the input that was wrong, instead of costing another round trip
+with the user.

@@ -75,6 +75,8 @@
 
 分段判据的完整参考见 [`docs/SEGMENTATION.md`](docs/SEGMENTATION.md)（阈值表、判定顺序、每条判据对应的真实反馈、已知取舍）。
 
+速查版经验见 [`docs/LESSONS.md`](docs/LESSONS.md)；界面设计与实现坑见 [`docs/UI.md`](docs/UI.md)。
+
 ## 四、已知限制
 
 | 限制 | 说明 |
