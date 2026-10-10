@@ -1,6 +1,6 @@
 # DraftGuard · 项目状态
 
-> 最后更新：本轮开发结束时　当前版本：**v2.27.1（versionCode 22701）**
+> 最后更新：本轮开发结束时　当前版本：**v2.29.0（versionCode 22900）**
 > 仓库：https://github.com/clotten/DraftGuard
 > 开发复盘见 [`docs/RETRO.md`](docs/RETRO.md)；排障见 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 > （12 节）；无线调试与设备操作见 [`docs/REMOTE-DEBUG.md`](docs/REMOTE-DEBUG.md)。
@@ -67,10 +67,10 @@
 
 | 文件 | 项数 | 覆盖 |
 |---|---|---|
-| `test/BurstTest.java` | 47 | 分段判据、占位识别、提交边界、草稿续写 |
+| `test/BurstTest.java` | 58 | 分段判据、占位识别、提交边界、草稿续写 |
 | `test/StoreTest.java` | 22 | 写入/读回/搜索/索引/分钟字段/重启 |
 
-合计 **69 项离线断言**，跑在普通 JVM 上，不需要设备。CI 另含全量源码编译
+合计 **80 项离线断言**，跑在普通 JVM 上，不需要设备。CI 另含全量源码编译
 与诊断字段守护。
 
 分段判据的完整参考见 [`docs/SEGMENTATION.md`](docs/SEGMENTATION.md)（阈值表、判定顺序、每条判据对应的真实反馈、已知取舍）。
@@ -121,7 +121,7 @@
 ### 出包
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build-apk.ps1 -OutName 'DraftGuard-2.27.1.apk' -VersionName '2.27.1'
+powershell -ExecutionPolicy Bypass -File build-apk.ps1 -OutName 'DraftGuard-2.29.0.apk' -VersionName '2.29.0'
 ```
 
 版本号在构建时**写进清单**（因为 aapt2 忽略参数），并在构建后断言产物版本，不符即失败。
