@@ -87,7 +87,7 @@
    （教训：换版本前先确认失败原因，否则只是浪费时间下载。）
 4. **`exported="false"` 连 shell 都发不进广播**。诊断探针第一版就是这么废掉的。
    正确做法：`exported="true"` + 应用内开关把门 + 明确文档说明。
-5. **手机连的是电脑开的移动热点**（`192.168.137.x`），这反而比同一 WiFi 更稳，
+5. **手机连的是电脑开的移动热点**（`<本机热点网段>`），这反而比同一 WiFi 更稳，
    不受路由器 AP 隔离影响。
 6. **应用私有目录 `adb pull` 不到**（Android 11+），非 debuggable 应用也不能 `run-as`。
    所以要看应用内部状态，只能让**应用自己**把它打到 logcat（探针方案）。
@@ -375,7 +375,7 @@ Bound services           已绑定 → {}
 ### 4. 被误报的失败（CI）
 
 CI 连续失败，显示 `Storage tests failed`，但真正原因是：
-`tools/check_diag_fields.py` 里写死了 Windows 路径 `E:\desktop\...`，
+`tools/check_diag_fields.py` 里写死了 Windows 路径（形如 `X:\...\项目目录\...`），
 在 Linux runner 上直接报错退出。**与存储测试毫无关系。**
 
 > 教训：失败信息里的"哪个步骤"不一定等于"哪里错了"。

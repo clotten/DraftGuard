@@ -111,11 +111,11 @@
 
 | 项 | 值 |
 |---|---|
-| Android SDK | `D:\android-sdk_r24.4.1-windows\android-sdk-windows` |
+| Android SDK | `<Android SDK>` |
 | build-tools | `36.1.0`（注意：该版本 aapt2 **静默忽略** `--version-code/--version-name`） |
 | 平台包 | `android-36` |
 | JDK | 17 |
-| 手机 | Redmi Note 10（M2103K19C）/ Android 11 / MIUI 12.5 |
+| 手机 | Redmi Note 10/ Android 11 / MIUI 12.5 |
 | 连接 | 无线调试，手机连电脑热点 |
 
 ### 出包

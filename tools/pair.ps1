@@ -6,14 +6,30 @@
 #  这里用 .NET Process 精确控制 stdin，写入配对码后关闭流。
 #
 #  用法：
-#    .\pair.ps1 -Target 192.168.137.173:33969 -Code 068829
-#    .\pair.ps1 -Target 192.168.137.173:33969 -Code 068829 -Connect 192.168.137.173:37117
+#    .\pair.ps1 -Target <手机IP>:33969 -Code 068829
+#    .\pair.ps1 -Target <手机IP>:33969 -Code 068829 -Connect <手机IP>:37117
 # =====================================================================
 param(
     [Parameter(Mandatory = $true)][string]$Target,   # 配对用 IP:端口（弹窗里的那个）
     [Parameter(Mandatory = $true)][string]$Code,     # 6 位配对码
     [string]$Connect,                                # 连接用 IP:端口（无线调试主页面那个）
-    [string]$Adb = 'D:\Android\Sdk\platform-tools\adb.exe'
+    # adb 路径自动探测：优先环境变量，再退回常见安装位置（不要写死本机路径）
+[string]$Adb = ''
+if (-not $Adb) {
+    if ($env:ANDROID_HOME) { $Adb = Join-Path $env:ANDROID_HOME 'platform-tools\adb.exe' }
+    elseif ($env:ANDROID_SDK_ROOT) { $Adb = Join-Path $env:ANDROID_SDK_ROOT 'platform-tools\adb.exe' }
+    else {
+        foreach ($c in @("$env:LOCALAPPDATA\Android\Sdk", 'C:\Android\Sdk', 'D:\Android\Sdk')) {
+            if (Test-Path (Join-Path $c 'platform-tools\adb.exe')) {
+                $Adb = Join-Path $c 'platform-tools\adb.exe'; break
+            }
+        }
+    }
+}
+if (-not $Adb -or -not (Test-Path $Adb)) {
+    Write-Host '找不到 adb.exe，请用 -Adb 参数指定，或设置 ANDROID_HOME 环境变量' -ForegroundColor Red
+    exit 1
+}
 )
 
 $ErrorActionPreference = 'Continue'

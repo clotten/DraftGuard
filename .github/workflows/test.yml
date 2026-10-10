@@ -85,3 +85,9 @@ jobs:
       # MainActivity 的诊断面板看到（或其 diagXxx 静态镜像），否则失败。
       - name: Guard diagnostic fields
         run: python3 tools/check_diag_fields.py
+
+        # 防止把使用者的本机环境信息（用户目录、机器名、局域网 IP 等）提交进公开仓库。
+        # 本脚本用通用模式识别，自身不含任何个人字符串；
+        # 额外的本机私有标识可写在 tools/.private-tokens（该文件不入库）。
+        - name: Guard private paths
+          run: python3 tools/check_private_paths.py

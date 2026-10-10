@@ -13,7 +13,10 @@
 # =====================================================================
 param(
     [string]$Version,
-    [string]$Sdk = 'D:\android-sdk_r24.4.1-windows\android-sdk-windows',
+    # SDK 路径留空即自动探测（环境变量 → 常见安装位置）。
+    # 不要在这里写死本机路径：仓库是公开的，写死会泄露使用者的磁盘布局，
+    # 也让别人 clone 下来跑不起来。
+    [string]$Sdk  = '',
     [string]$Bt = '36.1.0',
     [string]$Plat = 'android-36',
     [string]$KeyStore = "$PSScriptRoot\draftguard-release.keystore",

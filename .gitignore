@@ -50,3 +50,10 @@ test_out.txt
 tools/patch_step*.py
 tools/dedup*.py
 tools/*_oneoff.py
+
+# 本机私有标识（护栏用；含具体路径，绝不入库）
+tools/.private-tokens
+
+# Python 字节码缓存（.pyc 里会残留源码中的绝对路径，绝不能入库）
+__pycache__/
+*.pyc

@@ -1,6 +1,6 @@
 # 卡巴斯基排除项清单（本机实测）
 
-> 适用机器：LAPTOP-…　生成时间：2026-10-10
+> 生成时间：2026-10-10
 > 起因：卡巴斯基把 **DeepSeek Harness** 判为 `PDM:Exploit.Win32.Generic`（主动防御/行为检测，
 > 类型标"木马"、级别"高"、动作"已阻止"）。
 
@@ -27,7 +27,7 @@ DeepSeek Harness 的行为是：
 
 ```
 设置 → 威胁与排除 → 指定受信任应用程序 → 添加
-  对象：D:\dsharness\DeepSeek Harness.exe
+  对象：<Harness>\DeepSeek Harness.exe
   勾选：☑ 不监视应用程序活动        ← 这一项才关掉 PDM
         ☑ 不扫描打开的文档
         ☑ 不扫描网络流量（可选）
@@ -41,24 +41,24 @@ DeepSeek Harness 的行为是：
 
 | 目录 | 为什么 |
 |---|---|
-| `D:\dsharness` | Harness 本体与运行时文件 |
-| `E:\desktop\酒馆\tools\ziJi` | 项目源码、构建产物（每次编译都产生新 APK） |
+| `<Harness>` | Harness 本体与运行时文件 |
+| `<repo>` | 项目源码、构建产物（每次编译都产生新 APK） |
 
 ### 3. 如果 `adb` 被拦（连不上手机 / 装不上包）
 
 | 目录 | 说明 |
 |---|---|
-| `D:\Android\Sdk\platform-tools` | 含 `adb.exe`，会与手机建立网络连接，容易被判"网络攻击" |
+| `<Android SDK>\platform-tools` | 含 `adb.exe`，会与手机建立网络连接，容易被判"网络攻击" |
 
 ### 4. 构建工具链（一般不必，除非报错指向它）
 
 | 目录 / 程序 | 用途 |
 |---|---|
-| `D:\android-sdk_r24.4.1-windows\android-sdk-windows\build-tools\36.1.0\aapt2.exe` | 编译资源 |
+| `<Android SDK>\build-tools\<ver>\aapt2.exe` | 编译资源 |
 | …同上 `\d8.bat` | dex 编译 |
 | …同上 `\apksigner.bat` | 签名 |
 | …同上 `\zipalign.exe` | 对齐 |
-| `C:\Users\clotten\AppData\Local\Programs\FlyEnv-Data\env\java\bin\` | `javac` / `java` / `keytool` |
+| `<JDK>\bin\` | `javac` / `java` / `keytool` |
 | `C:\Program Files\Git\cmd\git.exe` | 版本控制 |
 
 > 这些是标准开发工具，通常不会被判恶意。**先只加第 1、2 项**，出问题再往下加。
@@ -121,7 +121,7 @@ SHA256:    78EC51EB9C57A2877D1493618CEE140FDF54DF4807A468483C7401F354367CBC
 **① 文件夹排除**（威胁与排除 → 管理排除项）
 
 ```
-文件或文件夹:   D:\dsharness\
+文件或文件夹:   <Harness>\
 检测对象类型:   *
 文件哈希:       *
 保护组件:       所有组件        ← 必须选"所有组件"，否则行为检测不受影响
@@ -130,7 +130,7 @@ SHA256:    78EC51EB9C57A2877D1493618CEE140FDF54DF4807A468483C7401F354367CBC
 **② 受信任应用程序**（威胁与排除 → 指定受信任应用程序）
 
 ```
-对象: D:\dsharness\DeepSeek Harness.exe
+对象: <Harness>\DeepSeek Harness.exe
 
 ☑ 不扫描应用程序打开的文件
 ☑ 不监控应用程序活动          ← 核心项，PDM 就是它拦的
@@ -157,8 +157,8 @@ SHA256:    78EC51EB9C57A2877D1493618CEE140FDF54DF4807A468483C7401F354367CBC
 
 | 目录 | 为什么建议加 |
 |---|---|
-| `E:\desktop\酒馆\tools\ziJi` | 这里会不断生成 APK。这个 APK **在杀软眼里就是键盘记录器画像**（无障碍权限 + 自签名），将来一次全盘扫描可能把它隔离掉，导致"刚编译好就不见了"。加排除可避免 |
-| `D:\Android\Sdk\platform-tools` | 含 `adb.exe`。它会与手机建立网络连接，某些情况下会被判"网络攻击"而被拒。目前实测正常，**被拦了再加** |
+| `<repo>` | 这里会不断生成 APK。这个 APK **在杀软眼里就是键盘记录器画像**（无障碍权限 + 自签名），将来一次全盘扫描可能把它隔离掉，导致"刚编译好就不见了"。加排除可避免 |
+| `<Android SDK>\platform-tools` | 含 `adb.exe`。它会与手机建立网络连接，某些情况下会被判"网络攻击"而被拒。目前实测正常，**被拦了再加** |
 
 ## 需要知情的权衡
 

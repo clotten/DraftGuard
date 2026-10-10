@@ -2,10 +2,10 @@
 #  connect-phone.ps1 — 一条命令完成无线调试「配对 + 连接」
 #
 #  用法（手机弹窗开着的时候执行）：
-#     cd E:\desktop\酒馆\tools\ziJi
-#     .\tools\connect-phone.ps1 -Pair 192.168.137.173:39299 -Code 797139 -Connect 192.168.137.173:37117
+#     cd <repo>
+#     .\tools\connect-phone.ps1 -Pair <手机IP>:39299 -Code 797139 -Connect <手机IP>:37117
 #
-#  手机 IP 通常不变（你连的是电脑热点，固定 192.168.137.173）。
+#  手机 IP 通常不变（你连的是电脑热点，通常固定）。
 #  配对端口每次点开弹窗都不同，连接端口也是。
 #
 #  不想每次敲这么多参数，就把手机当前信息填进下面的默认值，之后直接跑：
@@ -15,19 +15,35 @@ param(
     [string]$Pair,                                  # 弹窗里的「IP 地址和端口」
     [string]$Code,                                  # 弹窗里的 6 位「WLAN 配对码」
     [string]$Connect,                               # 无线调试主页面的「IP 地址和端口」
-    [string]$Adb = 'D:\Android\Sdk\platform-tools\adb.exe'
+    # adb 路径自动探测：优先环境变量，再退回常见安装位置（不要写死本机路径）
+[string]$Adb = ''
+if (-not $Adb) {
+    if ($env:ANDROID_HOME) { $Adb = Join-Path $env:ANDROID_HOME 'platform-tools\adb.exe' }
+    elseif ($env:ANDROID_SDK_ROOT) { $Adb = Join-Path $env:ANDROID_SDK_ROOT 'platform-tools\adb.exe' }
+    else {
+        foreach ($c in @("$env:LOCALAPPDATA\Android\Sdk", 'C:\Android\Sdk', 'D:\Android\Sdk')) {
+            if (Test-Path (Join-Path $c 'platform-tools\adb.exe')) {
+                $Adb = Join-Path $c 'platform-tools\adb.exe'; break
+            }
+        }
+    }
+}
+if (-not $Adb -or -not (Test-Path $Adb)) {
+    Write-Host '找不到 adb.exe，请用 -Adb 参数指定，或设置 ANDROID_HOME 环境变量' -ForegroundColor Red
+    exit 1
+}
 )
 
 # ↓↓↓ 把这几个默认值改成手机当前显示的，以后就能直接跑脚本 ↓↓↓
 $DefaultPairPort    = '39299'
 $DefaultConnectPort = '37117'
-$PhoneIp            = '192.168.137.173'
+$PhoneIp            = '<手机IP>'
 # ↑↑↑ 改这里 ↑↑↑
 
 $ErrorActionPreference = 'Continue'
 if (-not (Test-Path $Adb)) { throw "找不到 adb：$Adb" }
 
-if (-not $PhoneIp) { $PhoneIp = '192.168.137.173' }
+if (-not $PhoneIp) { $PhoneIp = '<手机IP>' }
 if (-not $Connect -and $DefaultConnectPort) { $Connect = "$PhoneIp`:$DefaultConnectPort" }
 if (-not $Pair -and $DefaultPairPort)       { $Pair    = "$PhoneIp`:$DefaultPairPort" }
 
@@ -35,7 +51,7 @@ if (-not $Code) {
     $Code = Read-Host "请输入手机弹窗里的 6 位配对码"
 }
 if (-not $Pair) {
-    $Pair = Read-Host "请输入手机弹窗里的「IP 地址和端口」(形如 192.168.137.173:39299)"
+    $Pair = Read-Host "请输入手机弹窗里的「IP 地址和端口」(形如 <手机IP>:39299)"
 }
 $Code = $Code.Trim()
 

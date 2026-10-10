@@ -5,7 +5,10 @@
 #  改了代码后重新跑一遍这个脚本即可出新包。
 # =====================================================================
 param(
-    [string]$Sdk  = 'D:\android-sdk_r24.4.1-windows\android-sdk-windows',
+    # SDK 路径留空即自动探测（环境变量 → 常见安装位置）。
+    # 不要在这里写死本机路径：仓库是公开的，写死会泄露使用者的磁盘布局，
+    # 也让别人 clone 下来跑不起来。
+    [string]$Sdk  = '',
     [string]$Bt   = '36.1.0',
     [string]$Plat = 'android-36',
     [string]$OutName = 'DraftGuard-2.0.0.apk',
@@ -25,6 +28,22 @@ $ErrorActionPreference = 'Continue'
 $root      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $appDir    = Join-Path $root 'android'
 $build     = Join-Path $root 'build'
+
+# ── SDK 路径探测（必须在计算工具路径之前）──
+# 不要在参数默认值里写死本机路径：仓库是公开的，写死既泄露使用者的磁盘布局，
+# 也让别人 clone 下来直接跑不起来。
+if ([string]::IsNullOrWhiteSpace($Sdk)) {
+    foreach ($cand in @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT,
+                        "$env:LOCALAPPDATA\Android\Sdk",
+                        'C:\Android\Sdk', 'D:\Android\Sdk')) {
+        if ($cand -and (Test-Path (Join-Path $cand 'platforms'))) { $Sdk = $cand; break }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($Sdk) -or -not (Test-Path $Sdk)) {
+    Write-Host '找不到 Android SDK：请用 -Sdk 参数指定，或设置 ANDROID_HOME 环境变量' -ForegroundColor Red
+    exit 1
+}
+
 $btDir     = Join-Path $Sdk "build-tools\$Bt"
 $androidJar= Join-Path $Sdk "platforms\$Plat\android.jar"
 

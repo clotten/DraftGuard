@@ -33,7 +33,27 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_ADB = r"D:\Android\Sdk\platform-tools\adb.exe"
+def _find_adb():
+    """adb 路径自动探测（不要写死本机路径）"""
+    import os
+    import shutil
+    for env in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        root = os.environ.get(env)
+        if root:
+            cand = os.path.join(root, "platform-tools", "adb.exe")
+            if os.path.exists(cand):
+                return cand
+    found = shutil.which("adb")
+    if found:
+        return found
+    for cand in (r"%LOCALAPPDATA%\Android\Sdk", "C:\\Android\\Sdk", "D:\\Android\\Sdk"):
+        p = os.path.join(os.path.expandvars(cand), "platform-tools", "adb.exe")
+        if os.path.exists(p):
+            return p
+    return "adb"
+
+
+DEFAULT_ADB = _find_adb()
 
 
 def find_adb(explicit: str | None) -> str:
