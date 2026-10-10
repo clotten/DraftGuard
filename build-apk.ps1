@@ -15,7 +15,7 @@ param(
     # 签名相关：默认用仓库里的调试密钥；发布时由 release.ps1 传入正式密钥
     [string]$KeyStore = '',
     [string]$KeyAlias = 'typelog',
-    [string]$StorePass = 'typelog123',
+    [string]$StorePass = '',   # 不设默认值：口令从环境变量 / keystore.properties / 交互输入取
     # -1 表示"从 VersionName 自动推算"：major*10000 + minor*100 + patch
     [string]$VersionName = '2.0.0',
     # -1 = 从 VersionName 自动推算 versionCode（major*10000 + minor*100 + patch），避免两处规则打架
@@ -25,6 +25,34 @@ param(
 # 注意：不能用 $ErrorActionPreference='Stop'。PowerShell 5.1 会把原生命令写到 stderr 的
 # 正常输出（keytool/aapt2 都会写）当成异常抛出，导致明明成功却中断。这里统一靠退出码判断。
 $ErrorActionPreference = 'Continue'
+
+# ── 密钥库口令：不要写默认值 ──
+# 这个文件是公开仓库的一部分，写死口令等于公开它。
+# 取值顺序：环境变量 → keystore.properties（已 gitignore）→ 交互输入。
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $StorePass) {
+    if ($env:DRAFTGUARD_STOREPASS) {
+        $StorePass = $env:DRAFTGUARD_STOREPASS
+    } else {
+        $propFile = Join-Path $root 'keystore.properties'
+        if (Test-Path $propFile) {
+            foreach ($line in Get-Content $propFile) {
+                if ($line -match '^\s*storePassword\s*=\s*(.+?)\s*$') { $StorePass = $Matches[1]; break }
+            }
+        }
+    }
+}
+if (-not $StorePass) {
+    try {
+        $sec = Read-Host -Prompt '请输入密钥库口令' -AsSecureString
+        $StorePass = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+    } catch {
+        $StorePass = Read-Host -Prompt '请输入密钥库口令'
+    }
+}
+if (-not $StorePass) { Write-Host '没有口令，无法签名' -ForegroundColor Red; exit 1 }
+
 $root      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $appDir    = Join-Path $root 'android'
 $build     = Join-Path $root 'build'

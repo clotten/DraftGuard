@@ -21,11 +21,39 @@ param(
     [string]$Plat = 'android-36',
     [string]$KeyStore = "$PSScriptRoot\draftguard-release.keystore",
     [string]$KeyAlias = 'draftguard',
-    [string]$StorePass = 'draftguard',
+    [string]$StorePass = '',   # 不设默认值：口令从环境变量 / keystore.properties / 交互输入取
     [switch]$NewKey
 )
 
 $ErrorActionPreference = 'Continue'
+
+# ── 密钥库口令：不要写默认值 ──
+# 这个文件是公开仓库的一部分，写死口令等于公开它。
+# 取值顺序：环境变量 → keystore.properties（已 gitignore）→ 交互输入。
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $StorePass) {
+    if ($env:DRAFTGUARD_STOREPASS) {
+        $StorePass = $env:DRAFTGUARD_STOREPASS
+    } else {
+        $propFile = Join-Path $root 'keystore.properties'
+        if (Test-Path $propFile) {
+            foreach ($line in Get-Content $propFile) {
+                if ($line -match '^\s*storePassword\s*=\s*(.+?)\s*$') { $StorePass = $Matches[1]; break }
+            }
+        }
+    }
+}
+if (-not $StorePass) {
+    try {
+        $sec = Read-Host -Prompt '请输入密钥库口令' -AsSecureString
+        $StorePass = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+    } catch {
+        $StorePass = Read-Host -Prompt '请输入密钥库口令'
+    }
+}
+if (-not $StorePass) { Write-Host '没有口令，无法签名' -ForegroundColor Red; exit 1 }
+
 $root = $PSScriptRoot
 
 # ---------------------------------------------------------------- 版本号
