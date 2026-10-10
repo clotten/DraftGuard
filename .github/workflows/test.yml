@@ -83,11 +83,17 @@ jobs:
       # 诊断面板是排查问题的唯一入口，少一个字段就等于瞎一半。
       # 扫描 TypelogService / LogStore 里所有可诊断字段，要求都能在
       # MainActivity 的诊断面板看到（或其 diagXxx 静态镜像），否则失败。
+      # 先确认工作流自身的结构没坏：
+      # YAML 缩进一旦串位，CI 会在解析阶段就失败，一个步骤都不会跑，
+      # 日志里看不到任何业务输出，很容易误判成代码问题。
+      - name: Guard workflow structure
+        run: python3 tools/check_workflow.py
+
       - name: Guard diagnostic fields
         run: python3 tools/check_diag_fields.py
 
-        # 防止把使用者的本机环境信息（用户目录、机器名、局域网 IP 等）提交进公开仓库。
-        # 本脚本用通用模式识别，自身不含任何个人字符串；
-        # 额外的本机私有标识可写在 tools/.private-tokens（该文件不入库）。
-        - name: Guard private paths
-          run: python3 tools/check_private_paths.py
+      # 防止把使用者的本机环境信息（用户目录、机器名、局域网 IP 等）提交进公开仓库。
+      # 本脚本用通用模式识别，自身不含任何个人字符串；
+      # 额外的本机私有标识可写在 tools/.private-tokens（该文件不入库）。
+      - name: Guard private paths
+        run: python3 tools/check_private_paths.py
