@@ -548,3 +548,49 @@ does not raise a false alarm.
 
 so a wrong verdict can be traced to the input that was wrong, instead of costing another round trip
 with the user.
+
+---
+
+## 15. MIUI says the accessibility service is faulty (it is not a crash)
+
+**Symptom reported by the user:** while an update was being tested, the app showed "未连接", and
+opening the system accessibility page showed DraftGuard marked as a faulty/abnormal app.
+
+**What actually happened** — from `logcat`, not from guessing:
+
+```
+Force stopping com.draftguard appid=10226 user=0: from process:13665   <- the adb force-stop
+Force removing ActivityRecord{... MainActivity ...}: app died, no saved state
+Force stopping com.draftguard ... user=-1: installPackageLI            <- the installer force-stops too
+```
+
+The process was **force-stopped**, not crashed. Android manages accessibility services on behalf of
+the app, so between "process killed" and "process restarted and rebound" the system has a declared
+service with no live instance — which MIUI renders as an app fault.
+
+**How to tell a force-stop from a crash:**
+
+| | crash | force-stop |
+|---|---|---|
+| `logcat -b crash` | has an entry | **empty** |
+| app data | may be lost | intact |
+| recovery | code fix needed | reopen the app |
+
+Check with: `adb logcat -d -b crash | grep draftguard`
+
+**Two things force-stop the app:**
+
+1. `adb shell am force-stop <pkg>` — **wipes the accessibility entry** (see §12); never use it.
+2. `adb install -r <apk>` — the installer force-stops the package itself (`installPackageLI`).
+   This one is unavoidable and **does not wipe the setting**; the system re-binds the service
+   afterwards.
+
+So a brief "app fault" flash after an update is expected and harmless. Recovery:
+
+1. Reopen the app — the service usually rebinds by itself.
+2. If the tools page still shows `○ 未开启`, toggle DraftGuard off and on once in accessibility.
+3. Data is not affected.
+
+**Lesson for whoever is testing on the device:** `am start` brings the app forward; `am force-stop`
+is never needed. Using it to "make sure the new code runs" destroys the user's accessibility
+setting and makes the app look broken to them.
