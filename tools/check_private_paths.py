@@ -43,6 +43,10 @@ ALLOW = [
 
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".apk", ".jar", ".keystore", ".jks"}
 
+# 本文件自己就写着这些模式（例如 "C:/Users/..."），扫自己必然命中 —— 排除它。
+# 这不是漏洞：本文件里的字符串是**模式**，不是任何人的真实路径。
+SKIP_FILES = {"tools/check_private_paths.py"}
+
 
 def tracked_files() -> list[Path]:
     out = subprocess.run(["git", "-C", str(ROOT), "ls-files"],
@@ -67,6 +71,9 @@ def main() -> int:
     findings = []
     for f in tracked_files():
         if f.suffix.lower() in SKIP_EXT or not f.is_file():
+            continue
+        rel = str(f.relative_to(ROOT)).replace("\\", "/")
+        if rel in SKIP_FILES:
             continue
         try:
             text = f.read_text(encoding="utf-8", errors="ignore")
