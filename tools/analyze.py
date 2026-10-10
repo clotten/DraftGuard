@@ -86,7 +86,7 @@ def mergeable(cur: dict, nxt: dict) -> bool:
     # 局部改一处（锤他→锤它）：共同开头在中间分叉，前缀判据失效
     if is_localized_edit(a, b) and gap <= 5 * 60 * 1000:
         return True
-    # 短间隔 + 短内容 + 共用实义字 ⇒ 整词打错重打（实测 来发展 → 开发者）
+    # 短间隔 + 短内容 + 共用实义字 ⇒ 整词打错重打（实测 甲苹果 → 乙苹果）
     gap = ms_of(nxt["ts"]) - ms_of(cur["ts"])
     if gap <= 10_000 and len(a) <= 8 and len(b) <= 8:
         return share_content_char(a, b)

@@ -159,7 +159,7 @@ One JSON object per line, one line per version:
 ```json
 {"ts":"2026-10-08T15:36:34.418","ms":1791444994418,"day":"2026-10-08","minute":"15:36",
  "bucket":"2026-10-08 15:36","app":"com.tencent.mm","ev":"text","chars":9,"delta":1,
- "comp":false,"text":"你做饭吗"}
+ "comp":false,"text":"这是一段示例文本"}
 ```
 
 | field | meaning |

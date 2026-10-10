@@ -10,8 +10,8 @@
 
 ### Android 11 及以上（推荐，不需要数据线）
 
-1. `设置 → 关于手机 → 连点「版本号」7 次` 打开开发者选项
-2. `设置 → 系统 → 开发者选项 → 无线调试`：打开
+1. `设置 → 关于手机 → 连点「版本号」7 次` 打开乙苹果选项
+2. `设置 → 系统 → 乙苹果选项 → 无线调试`：打开
 3. 点 **「使用配对码配对设备」**，会显示：
    - 一个 **6 位配对码**
    - 一个 **配对用 IP:端口**（形如 `<本机IP>:37129`）
@@ -60,7 +60,7 @@ adb devices -l
 | `failed to connect` / 超时 | 确认在同一 WiFi；关掉手机的 VPN/代理；路由器若开了 AP 隔离就改用数据线 |
 | 端口连不上 | 配对端口与连接端口搞混了；回无线调试页面重新确认 |
 | 连上但 `unauthorized` | 手机上会弹「允许 USB 调试吗」，勾选「始终允许」后确定 |
-| 频繁掉线 | 手机省电策略会掐掉 adb；`开发者选项 → 保持唤醒` 打开 |
+| 频繁掉线 | 手机省电策略会掐掉 adb；`乙苹果选项 → 保持唤醒` 打开 |
 
 ---
 
@@ -121,9 +121,9 @@ skipped: noFocus=0 delete=11 noise=3 ime=52 password=0 ...
   (all) com.tencent.mm = 21
   (all) com.iflytek.inputmethod.miui = 61
 -- files on disk (2026-10-08) --
-com.tencent.mm.jsonl | 行数 12 | 1840 字节 | 最后一条：你做饭吗
+com.tencent.mm.jsonl | 行数 12 | 1840 字节 | 最后一条：这是一段示例文本
 -- last 15 records --
-2026-10-08T22:40:12.331 [22:40] com.tencent.mm chars=5 text=<你做饭吗>
+2026-10-08T22:40:12.331 [22:40] com.tencent.mm chars=5 text=<测试文本>
 -- prefs --
  focusOnly=true ignoreDeletions=true skipIme=true polling=true minChars=2 ...
 ```

@@ -988,7 +988,7 @@ public class TypelogService extends AccessibilityService {
         // 时间戳必须在 flush **之后**重新取。
         // flush 会写入一条更晚的正文；如果边界沿用 flush 之前的时间，排序时边界会跑到
         // 正文前面，分段判据"两条文本之间夹着一次提交"就会把那条正文算进下一段。
-        // 实测表现：<越来越神秘> 与 <越来越神秘里> 本该按前缀合并，却被切开。
+        // 实测表现：<这是一段示例文本> 与 <这是一段示例文本啊> 本该按前缀合并，却被切开。
         now = System.currentTimeMillis();
         SendBoundary.mark(pkg);      // 仍记内存一份，供界面实时提示
         sendBoundaries++;

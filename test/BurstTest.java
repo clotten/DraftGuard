@@ -143,8 +143,8 @@ public class BurstTest {
                 "实际 " + b.size() + " 段：" + dump(b));
         check("前一段仍保留为「你好」", b.size() == 2 && "你好".equals(b.get(0).text),
                 b.size() == 2 ? b.get(0).text : dump(b));
-        // 反例护栏：整词重打（互不为子串）必须仍然合并，否则「来发展→开发者」会被拆开
-        List<Burst> b2 = Burst.group(twoMessages(APP, F, "来发展", "开发者", false));
+        // 反例护栏：整词重打（互不为子串）必须仍然合并，否则「甲苹果→乙苹果」会被拆开
+        List<Burst> b2 = Burst.group(twoMessages(APP, F, "甲苹果", "乙苹果", false));
         check("整词重打仍合并（互不为子串）", b2.size() == 1,
                 "实际 " + b2.size() + " 段：" + dump(b2));
 
@@ -168,9 +168,9 @@ public class BurstTest {
                 dump(d));
 
         System.out.println("\n== 23. 补字场景：上一条已发出，本条在其后追加一字 ==");
-        // 用户实录：打「越来越神奇里」发出，再打「了」发出。
+        // 用户实录：打「这是一段示例文本啊」发出，再打「了」发出。
         List<LogStore.Row> rows2 = new ArrayList<LogStore.Row>();
-        rows2.add(sec(APP, F, "越来越神奇里", 0));
+        rows2.add(sec(APP, F, "这是一段示例文本啊", 0));
         rows2.add(sendMark(APP, F, 1));
         rows2.add(sec(APP, F, "了", 3));
         rows2.add(sendMark(APP, F, 4));
@@ -287,11 +287,11 @@ public class BurstTest {
         System.out.println("\n== 15. 中间改一个字（豆包实录：锤他→锤它、可以买→可以吗）==");
         SendBoundary.resetForTest();
         List<Burst> b15 = Burst.group(streamSec(APP, F, 0,
-                "没有这个是个实验的臭虫半死不活锤他",
-                "没有这个是个实验的臭虫半死不活锤它"));
+                "没有这个是个实验的臭虫前面部分相同甲",
+                "没有这个是个实验的臭虫前面部分相同乙"));
         check("长句中改 1 字：合并为 1 段", b15.size() == 1, dump(b15));
         check("取改对后的内容", b15.size() == 1
-                        && "没有这个是个实验的臭虫半死不活锤它".equals(b15.get(0).text),
+                        && "没有这个是个实验的臭虫前面部分相同乙".equals(b15.get(0).text),
                 b15.isEmpty() ? "空" : b15.get(0).text);
 
         List<Burst> b15b = Burst.group(streamSec(APP, F, 0, "这个可以买", "这个可以吗"));
@@ -323,9 +323,9 @@ public class BurstTest {
 
         System.out.println("\n== 13. 整词打错重打（共同开头为 0，仍应合并）==");
         SendBoundary.resetForTest();
-        List<Burst> b13 = Burst.group(streamSec(APP, F, 0, "来发展", "开发者"));
+        List<Burst> b13 = Burst.group(streamSec(APP, F, 0, "甲苹果", "乙苹果"));
         check("短间隔+短内容：合并为 1 段", b13.size() == 1, dump(b13));
-        check("取改对后的内容", b13.size() == 1 && "开发者".equals(b13.get(0).text),
+        check("取改对后的内容", b13.size() == 1 && "乙苹果".equals(b13.get(0).text),
                 b13.isEmpty() ? "空" : b13.get(0).text);
         List<Burst> b13b = Burst.group(streamSec(APP, F, 0, "你好呀", "小朋友"));
         check("无共同开头也要分段（连发消息）", b13b.size() == 2, dump(b13b));
