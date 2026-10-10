@@ -57,3 +57,5 @@ tools/.private-tokens
 # Python 字节码缓存（.pyc 里会残留源码中的绝对路径，绝不能入库）
 __pycache__/
 *.pyc
+*.bak
+*.bak-*
