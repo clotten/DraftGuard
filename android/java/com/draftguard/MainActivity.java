@@ -805,18 +805,23 @@ public class MainActivity extends Activity {
 
             long from = rangeMinutes <= 0 ? 0
                     : System.currentTimeMillis() - rangeMinutes * 60_000L;
+            // 分层原则（本项目最该守住的一条）：
+            //   **过滤只作用于"显示"，不作用于"分段"。**
+            // 边界记录（发送标记 ev=send、空文本）是分段的唯一可靠依据，必须原样交给
+            // 分段器。曾经在这里把它们 continue 掉，分段器看不到任何边界，只能退回用
+            // 文本形态去猜 —— 实测后果："好 / 好不好 / 你不好 / 你不会" 四条独立消息
+            // 被合并成一条（界面显示「合并 4 版」）。
+            // 它们不会出现在结果里：Burst.groupNewestFirst 已负责过滤空段。
             java.util.List<LogStore.Row> kept = new java.util.ArrayList<>();
             for (LogStore.Row r : rows) {
-                if ("send".equals(r.ev) || r.text.isEmpty()) {
-                    continue;
-                }
+                final boolean boundary = "send".equals(r.ev) || r.text.isEmpty();
                 if (from > 0 && Burst.msOf(r.ts) < from) {
                     continue;
                 }
                 if (!appFilter.isEmpty() && !appFilter.contains(r.app)) {
                     continue;
                 }
-                if (!query.isEmpty() && !r.text.contains(query)) {
+                if (!boundary && !query.isEmpty() && !r.text.contains(query)) {
                     continue;
                 }
                 kept.add(r);
@@ -825,7 +830,11 @@ public class MainActivity extends Activity {
             final java.util.List<Object> out = new java.util.ArrayList<>();
             if (showRawRows) {
                 for (int i = kept.size() - 1; i >= 0 && out.size() < 400; i--) {
-                    out.add(kept.get(i));
+                    LogStore.Row rr = kept.get(i);
+                    if (rr.text.isEmpty()) {
+                        continue;      // 逐条视图只显示有正文的版本
+                    }
+                    out.add(rr);
                 }
             } else {
                 java.util.List<Burst> bursts = Burst.groupNewestFirst(kept);
