@@ -85,6 +85,101 @@ public class BurstTest {
         return rows;
     }
 
+    /** 构造一条秒级记录（用于精确控制间隔） */
+    static LogStore.Row sec(String app, String field, String text, int secAt) {
+        LogStore.Row r = new LogStore.Row();
+        r.app = app;
+        r.field = field;
+        r.text = text;
+        r.chars = text.length();
+        r.comp = false;
+        r.ts = String.format("2026-01-01T00:%02d:%02d.000", secAt / 60, secAt % 60);
+        r.minute = String.format("%02d:%02d", secAt / 60, secAt % 60);
+        return r;
+    }
+
+    /** 发送标记记录（ev=send，无文本），它就是分段用的"真信号" */
+    static LogStore.Row sendMark(String app, String field, int secAt) {
+        LogStore.Row r = sec(app, field, "", secAt);
+        r.ev = "send";
+        return r;
+    }
+
+    /**
+     * 一条消息 → 发送 → 另一条消息。
+     *
+     * @param withSend 是否插入发送标记：false 用来复现"发送没被检测到"的应用
+     */
+    static List<LogStore.Row> twoMessages(String app, String field,
+                                          String first, String second, boolean withSend) {
+        List<LogStore.Row> rows = new ArrayList<LogStore.Row>();
+        rows.add(sec(app, field, first, 0));
+        if (withSend) {
+            rows.add(sendMark(app, field, 2));
+        }
+        rows.add(sec(app, field, second, 4));
+        return rows;
+    }
+
+    static void testSendSplitsSimilarShortMessage() {
+        final String APP = "com.tencent.mobileqq";
+        final String F = APP + "#input";
+
+        System.out.println("\n== 19. 新消息恰好是上文的一个字（有发送信号）==");
+        // 上一条「你好」，这一条只发「好」—— 判据 11 会认为"在改同一个词"，
+        // 只有发送边界能证明这是两条独立的消息。
+        List<Burst> a = Burst.group(twoMessages(APP, F, "你好", "好", true));
+        check("有发送信号时必须分成 2 段", a.size() == 2, "实际 " + a.size() + " 段：" + dump(a));
+        check("后一段内容是「好」", a.size() == 2 && "好".equals(a.get(1).text),
+                a.size() == 2 ? a.get(1).text : dump(a));
+        check("前一段仍是「你好」", a.size() == 2 && "你好".equals(a.get(0).text),
+                a.size() == 2 ? a.get(0).text : dump(a));
+
+        System.out.println("\n== 20. 同样两条，但发送没被检测到（已知代价）==");
+        List<Burst> b = Burst.group(twoMessages(APP, F, "你好", "好", false));
+        // 「好」是「你好」的真子串 ⇒ 判据 11 明确排除这种形态，所以即使没有发送信号
+        // 也能正确分成两段。否则上一条会在显示里消失（只剩「好」）。
+        check("无发送信号时也分成 2 段（子串不算重打）", b.size() == 2,
+                "实际 " + b.size() + " 段：" + dump(b));
+        check("前一段仍保留为「你好」", b.size() == 2 && "你好".equals(b.get(0).text),
+                b.size() == 2 ? b.get(0).text : dump(b));
+        // 反例护栏：整词重打（互不为子串）必须仍然合并，否则「来发展→开发者」会被拆开
+        List<Burst> b2 = Burst.group(twoMessages(APP, F, "来发展", "开发者", false));
+        check("整词重打仍合并（互不为子串）", b2.size() == 1,
+                "实际 " + b2.size() + " 段：" + dump(b2));
+
+        System.out.println("\n== 21. 新消息与上文完全无共同字（无发送信号也应分段）==");
+        List<Burst> c = Burst.group(twoMessages(APP, F, "你好", "晚安", false));
+        check("无共同实义字 → 分成 2 段", c.size() == 2, "实际 " + c.size() + " 段：" + dump(c));
+
+        System.out.println("\n== 22. 连发多个不同单字（有发送信号，逐条发送）==");
+        List<LogStore.Row> rows = new ArrayList<LogStore.Row>();
+        String[] one = {"一", "二", "三", "四", "五", "六"};
+        int t = 0;
+        for (String v : one) {
+            rows.add(sec(APP, F, v, t));
+            rows.add(sendMark(APP, F, t + 1));
+            t += 3;
+        }
+        List<Burst> d = Burst.group(rows);
+        check("6 个单字 = 6 段", d.size() == 6, "实际 " + d.size() + " 段：" + dump(d));
+        check("段内容按顺序为 一..六",
+                d.size() == 6 && "一".equals(d.get(0).text) && "六".equals(d.get(5).text),
+                dump(d));
+
+        System.out.println("\n== 23. 补字场景：上一条已发出，本条在其后追加一字 ==");
+        // 用户实录：打「越来越神奇里」发出，再打「了」发出。
+        List<LogStore.Row> rows2 = new ArrayList<LogStore.Row>();
+        rows2.add(sec(APP, F, "越来越神奇里", 0));
+        rows2.add(sendMark(APP, F, 1));
+        rows2.add(sec(APP, F, "了", 3));
+        rows2.add(sendMark(APP, F, 4));
+        List<Burst> e = Burst.group(rows2);
+        check("两组各 1 段，共 2 段", e.size() == 2, "实际 " + e.size() + " 段：" + dump(e));
+        check("第二段是「了」", e.size() == 2 && "了".equals(e.get(1).text),
+                e.size() == 2 ? e.get(1).text : dump(e));
+    }
+
     public static void main(String[] args) {
         final String APP = "com.tencent.mm";
         final String F = APP + "#field";
@@ -279,7 +374,11 @@ public class BurstTest {
         check("正常内容不被形态特征误伤", !PlainText.looksLikeEmptyFieldHint("今天天气不错"), "误伤");
         check("以开始结尾的正常短句不误伤", !PlainText.looksLikeEmptyFieldHint("会议开始了"), "误伤");
 
+        // 注意：必须放在汇总之前，否则新用例不计入打印的项数（曾这样排错过）
+        testSendSplitsSimilarShortMessage();
+
         System.out.println("\n结果：通过 " + pass + " 项，失败 " + fail + " 项");
+
         System.exit(fail == 0 ? 0 : 1);
     }
 

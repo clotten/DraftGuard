@@ -1646,6 +1646,8 @@ public class MainActivity extends Activity {
         sb.append("跳过密码框：").append(TypelogService.skippedPassword).append("\n");
         sb.append("检测到点击「发送/搜索/发布」：").append(TypelogService.sendBoundaries)
           .append(" 次（消息分段依据）\n");
+        // 去抖被打断时的抢救次数：大于 0 说明"发送前最后一个字"确实丢过、且已被救回
+        sb.append("其中由「清空」抢救落盘：").append(TypelogService.flushes).append(" 次\n");
         sb.append("写入失败：").append(TypelogService.errors).append("\n");
         sb.append("本次会话落盘：").append(TypelogService.written).append(" 条\n");
         sb.append("最近一次错误的来源包：")

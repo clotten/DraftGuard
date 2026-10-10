@@ -614,6 +614,12 @@ public class TypelogService extends AccessibilityService {
                 added = text.length();
             }
             if (Prefs.ignoreDeletions(this) && added <= 0) {
+                // 输入框被**清空**（发送后）时，先把还挂着的那一版写掉再去丢弃它，
+                // 否则发送前敲的最后一个字会随这次"清空"一起消失。
+                // 只是退格变短则不写，尊重用户"删除不记录"的设置。
+                if (text.isEmpty()) {
+                    flushPending(field, app, appLabel, day, minute);
+                }
                 skippedDelete++;
                 // 仍然记住当前文本，但这一版不落盘
                 p.text = text;
@@ -623,6 +629,8 @@ public class TypelogService extends AccessibilityService {
                 return;
             }
             if (added <= 0 && text.trim().isEmpty()) {
+                // 同上：清空之前的那一版别丢
+                flushPending(field, app, appLabel, day, minute);
                 return;   // 全是空白，不值得占一条记录
             }
             // 新建的输入框里只有一个字符：多半是打了一个字又立刻删掉的碎片，不占记录
@@ -669,6 +677,38 @@ public class TypelogService extends AccessibilityService {
         sendStatsThrottled();
     }
 
+    /**
+     * 把"还挂在内存里、尚未落盘"的那一版立刻写入。
+     *
+     * 为什么需要它：写入走 350ms 去抖，**去抖期间 Pending.text 是这一版的唯一副本**。
+     * 一旦输入框被清空（发送后），旧代码会直接把它覆盖成空并返回，那一版就永远消失了。
+     * 用户看到的现象是"发送前敲的最后一个字不记录"。
+     *
+     * commit() 内部按 lastWriteText 去重，所以重复调用是安全的。
+     */
+    private void flushPending(String field, String app, String appLabel, String day, String minute) {
+        if (field == null || field.isEmpty()) {
+            return;
+        }
+        final String text;
+        final boolean comp;
+        synchronized (LOCK) {
+            Pending p = pending.get(field);
+            if (p == null || p.text.isEmpty() || p.text.equals(p.lastWriteText)) {
+                return;          // 没有待写内容，或这一版已经落过盘
+            }
+            if (p.runnable != null) {
+                handler.removeCallbacks(p.runnable);
+                p.runnable = null;
+            }
+            text = p.text;
+            comp = p.comp;
+        }
+        commit(app, appLabel, field, day, minute, text, comp, text.length(),
+                System.currentTimeMillis());
+        flushes++;
+    }
+
     private long lastUiAt;
     /** 最近一次"发送"点击时间（防抖：一次点击可能触发多个事件） */
     private long lastSendAt;
@@ -676,6 +716,8 @@ public class TypelogService extends AccessibilityService {
     private String lastFieldKey = "";
     /** 检测到的"发送"点击次数（消息边界信号，仅用于诊断显示） */
     public static volatile long sendBoundaries;
+    /** 去抖期间被"清空/发送"打断、由 flushPending 抢救落盘的次数 */
+    public static volatile long flushes;
     /** 诊断环形缓冲：把原始事件记下来，导出日志时能看到"系统到底给了什么" */
     static final java.util.List<String> DIAG =
             java.util.Collections.synchronizedList(new java.util.ArrayList<String>());
@@ -935,6 +977,19 @@ public class TypelogService extends AccessibilityService {
      */
     private void markSendBoundary(String pkg) {
         long now = System.currentTimeMillis();
+        // 先把发送前敲进去、还挂在去抖里的那一版写掉，再落发送标记 ——
+        // 顺序必须是"文本在前、边界在后"，分段的"夹着一次提交"判据才成立。
+        try {
+            Date sd = new Date(now);
+            flushPending(lastFieldKey, pkg, label(pkg),
+                    DAY.format(sd), TS.format(sd).substring(11, 16));
+        } catch (Throwable ignored) {
+        }
+        // 时间戳必须在 flush **之后**重新取。
+        // flush 会写入一条更晚的正文；如果边界沿用 flush 之前的时间，排序时边界会跑到
+        // 正文前面，分段判据"两条文本之间夹着一次提交"就会把那条正文算进下一段。
+        // 实测表现：<越来越神秘> 与 <越来越神秘里> 本该按前缀合并，却被切开。
+        now = System.currentTimeMillis();
         SendBoundary.mark(pkg);      // 仍记内存一份，供界面实时提示
         sendBoundaries++;
         try {
