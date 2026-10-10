@@ -81,6 +81,26 @@ public class TypelogService extends AccessibilityService {
     public static volatile String lastError = "";   // 最近一次写入错误，界面直接显示
     public static volatile long skippedNoFocus;     // 跳过：不是当前有焦点的输入框
     public static volatile long skippedNoise;       // 跳过：占位提示文字 / 单字符碎片
+    /**
+     * 跳过：输入框首条文本重现（占位提示兜底）。
+     *
+     * 单独计数而不是并进 skippedNoise —— 因为"重复粘贴同样的内容不被记录"
+     * 这个 bug 发生时，笼统的 skippedNoise 看不出是哪一类造成的，
+     * 只能靠推断。诊断要能直接指出"断在哪一环"。
+     */
+    public static volatile long skippedRepeat;
+    /**
+     * 跳过：同一分钟内文本与上次落盘完全相同（去重）。
+     *
+     * 单独计数：这个 bug（反复粘贴同样的内容只记录一次）发生时，
+     * 它被静默跳过、没有任何计数，只能靠推断发现。
+     */
+    public static volatile long skippedDedup;
+    /**
+     * 跳过：清空后的"截断碎片"（删除过程的尾巴，形如刚被删掉那段的前缀）。
+     * 与"删除不记录"是同一件事，只是发生在清空之后，单独计数以便区分。
+     */
+    public static volatile long skippedFragment;
     public static volatile String lastSourcePkg = "";
 
     /** 哪些应用真的给本服务发过事件 —— 排查"收不到某应用事件"最有用 */
@@ -117,6 +137,10 @@ public class TypelogService extends AccessibilityService {
         String text = "";
         String lastWriteText;    // 已落盘的那一版
         String lastWriteMinute;  // 已落盘那一版所属的分钟
+        /** 上一个事件是不是"变短"（递减删除）。用来区分"逐个删除到空"与"按钮清空" */
+        boolean prevShrunk;
+        /** 最近一次非空文本（用于识别"清空后的截断碎片"） */
+        String lastNonEmptyText;
         String minute = "";
         int chars;
         boolean comp;
@@ -526,6 +550,9 @@ public class TypelogService extends AccessibilityService {
             return;
         }
         if (text.isEmpty() && !Prefs.keepEmpty(this)) {
+            // 注意：这里**不**作废"本分钟已写过"的去重。
+            // 同一个输入框、同一分钟内内容相同的重复输入（比如反复粘贴同一个单号）
+            // 没有新信息，记一版就够 —— 曾经作废过，结果一个单号写出 53 个版本。
             return;
         }
         // 输入框的"首条文本"极可能是占位提示（部分应用不用 getHintText，
@@ -543,8 +570,14 @@ public class TypelogService extends AccessibilityService {
                     }
                 }
             }
-            if (seen != null && seen.equals(text)) {
-                skippedNoise++;
+            // 只在"这份文本看起来就是占位提示"时才跳过重复。
+            //
+            // 原先的判据是"只要重复就跳过"，结果把**正常的重复输入**也误杀了：
+            // 用户在同一搜索框里反复粘贴同一个快递单号，除第一次外全被丢掉，
+            // 表现为"直接粘贴不记录，先打一个字再粘贴却记录"
+            //（多了一个字，文本就不同了，于是没被跳过）。
+            if (seen != null && seen.equals(text) && PlainText.looksLikeEmptyFieldHint(text)) {
+                skippedRepeat++;
                 return;
             }
         }
@@ -592,6 +625,18 @@ public class TypelogService extends AccessibilityService {
                 p = new Pending();
                 pending.put(field, p);
             }
+            // 清空之后的"截断碎片"是删除的尾巴，按"删除不记录"跳过。
+            // 判据只看内容形态，不区分用户是逐个删除还是按按钮清空。
+            if (looksLikeDeletionFragment(p, text)) {
+                skippedFragment++;
+                return;
+            }
+            if (!text.isEmpty()) {
+                p.lastNonEmptyText = text;
+            }
+            // 本事件是否"变短"。注意：清空事件本身也是变短，所以不能用它自己判断，
+            // 要用**上一个事件**的判断（见下面的 prevShrunk）。
+            final boolean shrunkNow = p.chars > 0 && text.length() < p.chars;
             // 用户要求：删除操作不记录。倒着加的输入法（如某些九宫格）会先出现占位字符，
             // 所以同长度但内容不同时按"新增"处理，只有真的变短才算删除。
             int added = 0;
@@ -618,7 +663,27 @@ public class TypelogService extends AccessibilityService {
                 // 否则发送前敲的最后一个字会随这次"清空"一起消失。
                 // 只是退格变短则不写，尊重用户"删除不记录"的设置。
                 if (text.isEmpty()) {
-                    flushPending(field, app, appLabel, day, minute);
+                    // 只有"上一步没有在变短"时才救这一版 —— 那才是一次性清空（发送/按钮）。
+                    // 逐个删除到空时上一步一定在变短，救下来只会得到「Y」这种删除残渣。
+                    diag("CLEAR-A chars=" + p.chars + " prevShrunk=" + p.prevShrunk
+                            + " prev=<" + oneLine(p.text, 12) + "> -> "
+                            + (p.prevShrunk ? "skip(fragment)" : "flush"));
+                    if (!p.prevShrunk) {
+                        flushPending(field, app, appLabel, day, minute);
+                    } else {
+                        skippedFragment++;
+                    }
+                    p.prevShrunk = false;     // 已经空了，下一次从头算
+                } else {
+                    // 注意：这里**不要**每次都写 diag —— 删除过程每个字符都会走这里，
+                    // 会把环形缓冲里有价值的原始事件挤掉。只在清空那一刻记录决策（见下）。
+                    // 只在内容**真的变了**时才更新这个判断。
+                    // 实测：每次删除，输入法会先补发一个"内容相同"的重复事件；
+                    // 若让它把 prevShrunk 覆盖成 false，紧接着的清空就会被误判成
+                    // "发送/按钮清空"，从而把删除残渣（仅剩的「A」）当成草稿写进记录。
+                    if (!text.equals(p.text)) {
+                        p.prevShrunk = shrunkNow;
+                    }
                 }
                 skippedDelete++;
                 // 仍然记住当前文本，但这一版不落盘
@@ -629,8 +694,16 @@ public class TypelogService extends AccessibilityService {
                 return;
             }
             if (added <= 0 && text.trim().isEmpty()) {
-                // 同上：清空之前的那一版别丢
-                flushPending(field, app, appLabel, day, minute);
+                // 同上：只有在"上一步没在变短"时才救（那才是发送/按钮清空）
+                diag("CLEAR-B chars=" + p.chars + " prevShrunk=" + p.prevShrunk
+                        + " prev=<" + oneLine(p.text, 12) + "> -> "
+                        + (p.prevShrunk ? "skip(fragment)" : "flush"));
+                if (!p.prevShrunk) {
+                    flushPending(field, app, appLabel, day, minute);
+                } else {
+                    skippedFragment++;
+                }
+                p.prevShrunk = false;
                 return;   // 全是空白，不值得占一条记录
             }
             // 新建的输入框里只有一个字符：多半是打了一个字又立刻删掉的碎片，不占记录
@@ -649,6 +722,9 @@ public class TypelogService extends AccessibilityService {
                 return;
             }
             int delta = text.length() - p.chars;
+            if (!text.equals(p.text)) {     // 重复事件不改趋势判断（同上）
+                p.prevShrunk = shrunkNow;
+            }
             p.text = text;
             p.chars = text.length();
             p.comp = comp;
@@ -675,6 +751,76 @@ public class TypelogService extends AccessibilityService {
             lastTs = TS.format(new Date());
         }
         sendStatsThrottled();
+    }
+
+/**
+     * 作废"本分钟已写过同一文本"的记录。
+     *
+     * commit() 会跳过"同一分钟内文本相同"的版本 —— 这是为了挡住轮询路径：
+     * 每 900ms 重读同一个只读不动的输入框，不去重就会把同一段文字重复记很多遍。
+     *
+     * 但**输入框被清空过**之后又输入同样的内容，是一次全新的输入，不该算重复。
+     * 实测（菜鸟驿站搜索框反复粘贴同一个单号 8 次）：因为都落在同一分钟内、
+     * 文本又相同，只落盘了 2 条，看起来就像"粘贴没被记录"。
+     *
+     * 所以清空时把 lastWriteText 置空，让下一次相同文本重新落盘。
+     */
+/**
+     * 清空之后出现的"截断碎片"，算不算新输入？
+     *
+     * 用户实录（菜鸟搜索框，逐个删除）：
+     *   粘贴「79144276349552」→ 删到剩「79」→ 又粘贴 → 删到剩「7」→ …
+     * 「79」「7」「791」都是刚被删掉那段的**前缀**，是删除过程的尾巴，
+     * 按用户"删除不记录"的设置应当跳过。之前它们被当成"清空后的新增"记了下来。
+     *
+     * 关键：**不需要区分"逐个删除"还是"按钮清空"**。
+     * 两种清法都会让输入框变空；只要判断"新出现的这段是不是刚才那段的截断"即可 ——
+     * 这是内容层面的判据，与清空方式无关。
+     */
+    private static boolean looksLikeDeletionFragment(Pending p, String text) {
+        if (p == null || text == null || text.isEmpty()) {
+            return false;
+        }
+        if (p.chars != 0) {
+            return false;      // 只有"刚被清空"之后才可能产生碎片
+        }
+        String before = p.lastNonEmptyText;
+        return before != null && before.length() > text.length() && before.startsWith(text);
+    }
+
+/** 往诊断环形缓冲写一行（供远程排查；缓冲满时自动丢弃最旧的） */
+/** 单行化并截断：诊断输出用，避免把换行塞进 logcat */
+    private static String oneLine(String s, int max) {
+        if (s == null) {
+            return "";
+        }
+        String v = s.replace('\n', ' ').replace('\r', ' ');
+        return v.length() <= max ? v : v.substring(0, max) + "…";
+    }
+
+    private void diag(String s) {
+        try {
+            synchronized (DIAG) {
+                if (DIAG.size() > 2000) {
+                    DIAG.remove(0);
+                }
+                DIAG.add(s);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void invalidateLastWrite(String field) {
+        if (field == null || field.isEmpty()) {
+            return;
+        }
+        synchronized (LOCK) {
+            Pending p = pending.get(field);
+            if (p != null) {
+                p.lastWriteText = null;
+                p.lastWriteMinute = null;
+            }
+        }
     }
 
     /**
@@ -1050,6 +1196,7 @@ public class TypelogService extends AccessibilityService {
             }
             // 同一分钟内这一版已经写过了，就不再重复落盘
             if (text.equals(p.lastWriteText) && minute.equals(p.lastWriteMinute)) {
+                skippedDedup++;
                 return;
             }
             p.lastWriteText = text;

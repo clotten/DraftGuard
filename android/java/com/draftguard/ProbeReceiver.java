@@ -121,7 +121,10 @@ public class ProbeReceiver extends BroadcastReceiver {
                 + " sendBoundaries=" + TypelogService.sendBoundaries
                 + " flushes=" + TypelogService.flushes);
 
-        Log.i(TAG, "skipped: noFocus=" + TypelogService.skippedNoFocus
+        Log.i(TAG, "skipped: fragment=" + TypelogService.skippedFragment
+                + " dedup=" + TypelogService.skippedDedup
+                + " repeat=" + TypelogService.skippedRepeat
+                + " noFocus=" + TypelogService.skippedNoFocus
                 + " delete=" + TypelogService.skippedDelete
                 + " noise=" + TypelogService.skippedNoise
                 + " ime=" + TypelogService.skippedIme
@@ -189,6 +192,7 @@ public class ProbeReceiver extends BroadcastReceiver {
                 + " ignoreDeletions=" + Prefs.ignoreDeletions(context)
                 + " skipIme=" + Prefs.skipIme(context)
                 + " polling=" + Prefs.polling(context)
+                + " keepEmpty=" + Prefs.keepEmpty(context)
                 + " minChars=" + Prefs.minChars(context)
                 + " retention=" + Prefs.retentionDays(context)
                 + " ignoredApps=" + Prefs.ignored(context));

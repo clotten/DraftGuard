@@ -377,6 +377,15 @@ public class BurstTest {
         // 注意：必须放在汇总之前，否则新用例不计入打印的项数（曾这样排错过）
         testSendSplitsSimilarShortMessage();
 
+        System.out.println("\n== 24. 快递单号这类内容不能被当成占位提示 ==");
+        // 这条守卫是"重复粘贴被误杀"那个 bug 的前提：
+        // 修复后的跳过条件要求"重复 **且** 看起来像占位提示"，
+        // 所以必须保证纯数字/单号不会命中占位提示判据。
+        check("纯数字单号不算占位提示", !PlainText.looksLikeEmptyFieldHint("777452832789257"), "误判为占位");
+        check("字母数字单号不算占位提示", !PlainText.looksLikeEmptyFieldHint("JT5534213587104"), "误判为占位");
+        check("普通短句不算占位提示", !PlainText.looksLikeEmptyFieldHint("查快递"), "误判为占位");
+        check("小米笔记那条仍算占位提示", PlainText.looksLikeEmptyFieldHint("开始书写或 创建思维笔记"), "该拦的没拦");
+
         System.out.println("\n结果：通过 " + pass + " 项，失败 " + fail + " 项");
 
         System.exit(fail == 0 ? 0 : 1);

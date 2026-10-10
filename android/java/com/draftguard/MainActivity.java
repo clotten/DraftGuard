@@ -1650,6 +1650,9 @@ public class MainActivity extends Activity {
         sb.append("跳过删除操作(按设置)：").append(TypelogService.skippedDelete).append("\n");
         sb.append("跳过未聚焦的框：").append(TypelogService.skippedNoFocus).append("\n");
         sb.append("跳过占位提示/单字碎片：").append(TypelogService.skippedNoise).append("\n");
+        sb.append("跳过首条文本重现(占位兜底)：").append(TypelogService.skippedRepeat).append("\n");
+        sb.append("跳过同分钟去重(内容未变)：").append(TypelogService.skippedDedup).append("\n");
+        sb.append("跳过清空后的删除碎片：").append(TypelogService.skippedFragment).append("\n");
         sb.append("跳过(设置里排除的)：").append(TypelogService.skippedIgnored).append("\n");
         sb.append("跳过(其它原因)：").append(TypelogService.skippedOther).append("\n");
         sb.append("跳过密码框：").append(TypelogService.skippedPassword).append("\n");
