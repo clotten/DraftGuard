@@ -208,6 +208,8 @@ def main() -> int:
     ap.add_argument("dir", help="解压后的日志目录（含 2026-10-09 这样的日期目录）")
     ap.add_argument("-o", "--out", required=True, help="输出文件路径")
     ap.add_argument("--plain", action="store_true", help="输出纯文本而不是 Markdown")
+    ap.add_argument("--text-only", action="store_true",
+                    help="只输出每段的正文本身（无时间、无应用名、无统计），段间空一行，按时间正序")
     ap.add_argument("--skip-tests", action="store_true", help="过滤明显的测试噪音")
     ap.add_argument("--app", default=None, help="只看匹配该子串的应用")
     ap.add_argument("--since", default=None, help="只看该时刻之后（HH:MM）")
@@ -243,7 +245,14 @@ def main() -> int:
         by_day.setdefault(b["ts"][:10], []).append(b)
 
     lines: list[str] = []
-    if args.plain:
+    if args.text_only:
+        # 只要"一段一段的话"：每段正文原样输出，段间空一行，按时间正序（便于顺着读）。
+        # 刻意不加时间戳 / 应用名 / 统计 —— 那些用 --plain 才有。
+        for day in sorted(by_day):
+            for b in sorted(by_day[day], key=lambda x: x["ts"]):
+                lines.append(b["text"])
+                lines.append("")
+    elif args.plain:
         lines.append("DraftGuard 记录汇总")
         lines.append("=" * 60)
         lines.append(f"生成时间：{datetime.now():%Y-%m-%d %H:%M}")
