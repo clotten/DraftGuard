@@ -209,7 +209,9 @@ def main() -> int:
     ap.add_argument("-o", "--out", required=True, help="输出文件路径")
     ap.add_argument("--plain", action="store_true", help="输出纯文本而不是 Markdown")
     ap.add_argument("--text-only", action="store_true",
-                    help="只输出每段的正文本身（无时间、无应用名、无统计），段间空一行，按时间正序")
+                    help="只输出每段的正文，段间空一行，按时间正序；每段带一行表头 [日期 时间] 应用名")
+    ap.add_argument("--bare", action="store_true",
+                    help="配合 --text-only：连表头也去掉，只留正文")
     ap.add_argument("--skip-tests", action="store_true", help="过滤明显的测试噪音")
     ap.add_argument("--app", default=None, help="只看匹配该子串的应用")
     ap.add_argument("--since", default=None, help="只看该时刻之后（HH:MM）")
@@ -246,10 +248,13 @@ def main() -> int:
 
     lines: list[str] = []
     if args.text_only:
-        # 只要"一段一段的话"：每段正文原样输出，段间空一行，按时间正序（便于顺着读）。
-        # 刻意不加时间戳 / 应用名 / 统计 —— 那些用 --plain 才有。
+        # 只要"一段一段的话"，按时间正序（便于顺着读）。
+        # 每段前一行表头：`[日期 时间] 应用名`，正文原样保留（多行也完整）。
+        # 加 --bare 则连表头也去掉，只剩正文。
         for day in sorted(by_day):
             for b in sorted(by_day[day], key=lambda x: x["ts"]):
+                if not args.bare:
+                    lines.append(f"[{day} {fmt_span(b)}] {label(b['app'])}")
                 lines.append(b["text"])
                 lines.append("")
     elif args.plain:
