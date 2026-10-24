@@ -61,6 +61,7 @@ jobs:
           javac -encoding UTF-8 -source 8 -target 8 \
             -bootclasspath "$AJ:${BT}core-lambda-stubs.jar" \
             -classpath "$AJ" -nowarn -d build/test \
+            android/java/com/draftguard/SqlSchema.java \
             android/java/com/draftguard/LogStore.java \
             android/java/com/draftguard/Record.java \
             android/java/com/draftguard/Json.java \
@@ -121,6 +122,10 @@ jobs:
       # 先确认工作流自身的结构没坏：
       # YAML 缩进一旦串位，CI 会在解析阶段就失败，一个步骤都不会跑，
       # 日志里看不到任何业务输出，很容易误判成代码问题。
+      # 防止"本地清单和 CI 清单不是同一份"——v3.2 就因为漏了 SqlSchema 红过一次。
+      - name: Guard test compile list
+        run: python3 tools/check_test_compile_list.py
+
       - name: Guard workflow structure
         run: python3 tools/check_workflow.py
 
