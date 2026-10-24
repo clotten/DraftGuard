@@ -38,15 +38,50 @@ final class SqlIndex {
     private SQLiteDatabase db;
     private String lastError = "";
 
-    SqlIndex(File filesDir) {
+    /**
+     * 进程内单例。
+     *
+     * 为什么必须单例：LogStore 会被反复 new（每次刷新列表都 new 一个），
+     * 如果每个实例都 openOrCreateDatabase，就会得到一堆连接 ——
+     * 实测表现是 "database is locked" + "SQLiteConnection was leaked"，
+     * 进而构造异常、自动降级回 JSONL，优化全部失效（读 2 万行还是 2.6 秒）。
+     */
+    private static SqlIndex shared;
+
+    static synchronized SqlIndex get(File filesDir) {
+        if (shared == null) {
+            shared = new SqlIndex(filesDir);
+        }
+        return shared;
+    }
+
+    /** 测试/清空场景用：丢掉单例，下次会重新打开 */
+    static synchronized void reset() {
+        if (shared != null) {
+            shared.close();
+            shared = null;
+        }
+    }
+
+    private SqlIndex(File filesDir) {
         File f = new File(filesDir, DB_NAME);
         db = SQLiteDatabase.openOrCreateDatabase(f, null);
-        // WAL：读写互不阻塞（服务在写、界面在读）
-        db.execSQL("PRAGMA journal_mode=WAL");
-        // FULL：每条提交都真落盘，和 JSONL 的 fsync 同等持久性
-        db.execSQL("PRAGMA synchronous=FULL");
+        // WAL 会写进数据库文件、下次打开自动沿用，所以这里的 PRAGMA 失败不算致命
+        // （另一条连接正开着时，改 journal_mode 会报 database is locked）
+        try {
+            db.execSQL("PRAGMA journal_mode=WAL");
+        } catch (Throwable ignored) {
+        }
+        try {
+            // FULL：每条提交都真落盘，和 JSONL 的 fsync 同等持久性
+            db.execSQL("PRAGMA synchronous=FULL");
+        } catch (Throwable ignored) {
+        }
         createSchema();
-        db.setVersion(DB_VERSION);
+        try {
+            db.setVersion(DB_VERSION);
+        } catch (Throwable ignored) {
+        }
     }
 
     private void createSchema() {
@@ -209,6 +244,44 @@ final class SqlIndex {
         } finally {
             closeQuietly(c);
         }
+        return out;
+    }
+
+    /**
+     * 只取最新的 limit 行（按时间正序返回，便于直接分段）。
+     *
+     * 为什么需要它：界面最多显示 400 段，把 2 万行全搬进 Java 再砍到 6000 行是白费
+     * —— 实测"全部时间"因此要 2.6 秒。把上限推进 SQL，只搬真正要用的行。
+     */
+    List<LogStore.Row> readNewest(long fromMs, int limit) {
+        List<LogStore.Row> out = new ArrayList<>();
+        Cursor c = null;
+        try {
+            String sql = "SELECT ts, minute, app, field, text, comp, chars, ev"
+                    + " FROM rows" + (fromMs > 0 ? " WHERE ms >= " + fromMs : "")
+                    + " ORDER BY ms DESC"
+                    + (limit > 0 ? " LIMIT " + limit : "");
+            c = db.rawQuery(sql, null);
+            while (c.moveToNext()) {
+                LogStore.Row r = new LogStore.Row();
+                r.ts = str(c, 0);
+                r.minute = str(c, 1);
+                r.app = str(c, 2);
+                r.field = str(c, 3);
+                r.text = str(c, 4);
+                r.comp = c.getInt(5) != 0;
+                r.chars = c.getInt(6);
+                r.ev = str(c, 7).isEmpty() ? "text" : str(c, 7);
+                out.add(r);
+            }
+        } catch (Throwable e) {
+            lastError = String.valueOf(e);
+            Log.w(TAG, "readNewest 失败", e);
+        } finally {
+            closeQuietly(c);
+        }
+        // SQL 给的是新→旧，分段要正序
+        java.util.Collections.reverse(out);
         return out;
     }
 

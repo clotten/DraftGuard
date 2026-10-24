@@ -846,7 +846,15 @@ public class MainActivity extends Activity {
             int daysRead = 0;
 
             java.util.List<LogStore.Row> rows = new java.util.ArrayList<>();
-            for (String day : store.days()) {
+            int daysTotal = 0;
+            if (store.hasIndex()) {
+                // 索引可用：直接把"只要最新 N 行"交给 SQL ——
+                // 不读全部日期，也不把 2 万行搬进 Java 再砍掉
+                daysTotal = store.days().size();
+                rows.addAll(store.readNewest(from, SEGMENT_ROW_CAP));
+            }
+            for (String day : (store.hasIndex()
+                    ? java.util.Collections.<String>emptyList() : store.days())) {
                 if (fromDay != null && day.compareTo(fromDay) < 0) {
                     continue;       // 这一天整体早于范围 -> 整个文件都不用读
                 }
@@ -870,7 +878,7 @@ public class MainActivity extends Activity {
                 }
             }
             java.util.Collections.sort(rows, (a, b) -> a.ts.compareTo(b.ts));
-            lastListDays = daysRead;
+            lastListDays = store.hasIndex() ? daysTotal : daysRead;
             lastListRows = rows.size();
             // 只把最新的 SEGMENT_ROW_CAP 行交给分段器：界面最多 400 段，
             // 把 2 万行全分段只是白算。保留连续窗口，窗口内边界不动。

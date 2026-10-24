@@ -109,7 +109,7 @@ final class LogStore {
             root.mkdirs();
         }
         try {
-            idx = new SqlIndex(filesDir);
+            idx = SqlIndex.get(filesDir);
             backend = "SQLite";
         } catch (Throwable t) {
             // 普通 JVM（CI / 单元测试）会走到这里：自动降级，不影响任何行为
@@ -300,6 +300,33 @@ final class LogStore {
         String key() {
             return minute + "|" + field + "|" + text;
         }
+    }
+
+    /** 当前是否在用 SQLite 索引（决定读路径） */
+    boolean hasIndex() {
+        return idx != null;
+    }
+
+    /**
+     * 只取最新的 limit 行（正序）。索引可用时是一次带索引的查询；
+     * 否则退回"按天全读 + 取尾部"，行为一致但慢一些。
+     */
+    List<Row> readNewest(long fromMs, int limit) {
+        if (idx != null) {
+            List<Row> fast = idx.readNewest(fromMs, limit);
+            if (!fast.isEmpty()) {
+                return fast;
+            }
+        }
+        List<Row> all = new ArrayList<>();
+        for (String day : days()) {
+            all.addAll(readDay(day, 0));
+        }
+        Collections.sort(all, (x, y) -> x.ts.compareTo(y.ts));
+        if (limit > 0 && all.size() > limit) {
+            return new ArrayList<>(all.subList(all.size() - limit, all.size()));
+        }
+        return all;
     }
 
     List<String> days() {
