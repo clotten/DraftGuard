@@ -249,17 +249,19 @@ final class AppsPage {
         nav.setGravity(Gravity.CENTER_VERTICAL);
         nav.setPadding(0, 0, 0, host.dp(8));
 
-        final Button older = host.button("← 更早");
-        final Button newer = host.button("更晚 →");
+        // 位置按用户习惯调换：左「更晚」（往后翻）、右「更早」（往回翻）。
+        // 箭头也跟着指：← 表示朝"更新"走，→ 表示朝"更早"走。
+        final Button newer = host.button("← 更晚");
+        final Button older = host.button("更早 →");
         final TextView dayLabel = new TextView(host);
         dayLabel.setTextColor(Color.parseColor("#5B9DFF"));
         dayLabel.setTextSize(13);
         dayLabel.setGravity(Gravity.CENTER);
         dayLabel.setLayoutParams(new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        nav.addView(older);
+        nav.addView(newer);      // 左：更晚
         nav.addView(dayLabel);
-        nav.addView(newer);
+        nav.addView(older);      // 右：更早
         appsRoot.addView(nav);
 
         final TextView body = new TextView(host);
