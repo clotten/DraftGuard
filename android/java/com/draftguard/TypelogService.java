@@ -119,7 +119,10 @@ public class TypelogService extends AccessibilityService {
     private HandlerThread worker;
     private Handler handler;
     private LogStore store;
-    private final Map<String, Pending> pending = new HashMap<>();
+    /** 采集状态机（去抖 / 挂起版本 / 清空抢救），纯逻辑可单测 */
+    private final CaptureState state = new CaptureState();
+    /** 每个输入框的去抖定时器（CaptureState 不碰 Handler，所以放在这里） */
+    private final Map<String, Runnable> debounce = new HashMap<>();
     /**
      * 每个输入框首次出现的文本。
      *
@@ -133,19 +136,6 @@ public class TypelogService extends AccessibilityService {
     private final Map<String, String> pollLastText = new HashMap<>();
     private final Map<String, String> labelCache = new LinkedHashMap<>();
 
-    private static final class Pending {
-        String text = "";
-        String lastWriteText;    // 已落盘的那一版
-        String lastWriteMinute;  // 已落盘那一版所属的分钟
-        /** 上一个事件是不是"变短"（递减删除）。用来区分"逐个删除到空"与"按钮清空" */
-        boolean prevShrunk;
-        /** 最近一次非空文本（用于识别"清空后的截断碎片"） */
-        String lastNonEmptyText;
-        String minute = "";
-        int chars;
-        boolean comp;
-        Runnable runnable;
-    }
 
     /**
      * 界面上删除了记录后调用：关掉已打开的文件句柄。
@@ -598,7 +588,7 @@ public class TypelogService extends AccessibilityService {
         // 一个字节都读不到时，宁愿这一版漏掉，也不能把已有内容覆盖成空
         if (text.isEmpty()) {
             synchronized (LOCK) {
-                Pending exist = pending.get(field);
+                CaptureState.Pending exist = state.pendingOf(field);
                 if (exist == null || exist.chars == 0) {
                     return;
                 }
@@ -610,138 +600,76 @@ public class TypelogService extends AccessibilityService {
         final long now = System.currentTimeMillis();
         final String appLabel = label(app);
 
-        Pending p;
+        // ── 决策交给 CaptureState（纯逻辑，27 项离线测试守着）；这里只负责执行 ──
+        final CaptureState.Settings cs = new CaptureState.Settings(
+                Prefs.ignoreDeletions(this), Prefs.minChars(this), CACHE_LIMIT);
+        final CaptureState.Decision d;
         synchronized (LOCK) {
-            p = pending.get(field);
-            if (p == null) {
-                p = new Pending();
-                pending.put(field, p);
+            d = state.onText(field, text, comp, minute, cs);
+            if (!d.note.isEmpty()) {
+                diag(d.note);
             }
-            // 清空之后的"截断碎片"是删除的尾巴，按"删除不记录"跳过。
-            // 判据只看内容形态，不区分用户是逐个删除还是按按钮清空。
-            if (looksLikeDeletionFragment(p, text)) {
-                skippedFragment++;
-                return;
+            // 同一输入框只保留最后一次去抖。本次无论结果如何，旧定时器都要撤掉，
+            // 否则它会在事后把旧内容写进去 —— 那是最隐蔽的一类错序。
+            Runnable prev = debounce.remove(field);
+            if (prev != null) {
+                handler.removeCallbacks(prev);
             }
-            if (!text.isEmpty()) {
-                p.lastNonEmptyText = text;
-            }
-            // 本事件是否"变短"。注意：清空事件本身也是变短，所以不能用它自己判断，
-            // 要用**上一个事件**的判断（见下面的 prevShrunk）。
-            final boolean shrunkNow = CaptureDecisions.isShrink(p.chars, text);
-            // 用户要求：删除操作不记录。倒着加的输入法（如某些九宫格）会先出现占位字符，
-            // 所以同长度但内容不同时按"新增"处理，只有真的变短才算删除。
-            int added = 0;
-            if (p.chars > 0 && text.length() > 0) {
-                int common = 0;
-                int min = Math.min(text.length(), p.text.length());
-                while (common < min && text.charAt(common) == p.text.charAt(common)) {
-                    common++;
-                }
-                if (text.length() < p.text.length()) {
-                    added = 0;
-                } else if (text.length() == p.text.length()) {
-                    added = text.equals(p.text) ? 0 : 1;
-                } else if (text.length() - p.text.length() >= 2 && common == 0) {
-                    added = text.length();
-                } else {
-                    added = text.length() - p.text.length();
-                }
-            } else if (text.length() > 0) {
-                added = text.length();
-            }
-            if (Prefs.ignoreDeletions(this) && added <= 0) {
-                // 输入框被**清空**（发送后）时，先把还挂着的那一版写掉再去丢弃它，
-                // 否则发送前敲的最后一个字会随这次"清空"一起消失。
-                // 只是退格变短则不写，尊重用户"删除不记录"的设置。
-                if (text.isEmpty()) {
-                    // 只有"上一步没有在变短"时才救这一版 —— 那才是一次性清空（发送/按钮）。
-                    // 逐个删除到空时上一步一定在变短，救下来只会得到「Y」这种删除残渣。
-                    diag("CLEAR-A chars=" + p.chars + " prevShrunk=" + p.prevShrunk
-                            + " prev=<" + oneLine(p.text, 12) + "> -> "
-                            + (p.prevShrunk ? "skip(fragment)" : "flush"));
-                    if (!p.prevShrunk) {
-                        flushPending(field, app, appLabel, day, minute);
-                    } else {
-                        skippedFragment++;
-                    }
-                    p.prevShrunk = false;     // 已经空了，下一次从头算
-                } else {
-                    // 注意：这里**不要**每次都写 diag —— 删除过程每个字符都会走这里，
-                    // 会把环形缓冲里有价值的原始事件挤掉。只在清空那一刻记录决策（见下）。
-                    // 只在内容**真的变了**时才更新这个判断。
-                    // 实测：每次删除，输入法会先补发一个"内容相同"的重复事件；
-                    // 若让它把 prevShrunk 覆盖成 false，紧接着的清空就会被误判成
-                    // "发送/按钮清空"，从而把删除残渣（仅剩的「A」）当成草稿写进记录。
-                    if (CaptureDecisions.shouldUpdateTrend(text, p.text)) {
-                        p.prevShrunk = shrunkNow;
-                    }
+        }
+        switch (d.kind) {
+            case FLUSH_THEN_SKIP: {
+                // 去抖期间内存里那一版是**唯一副本**：输入框被清空（发送/按钮）时
+                // 必须先把它写掉，否则"发送前敲的最后一个字"会消失。
+                CaptureState.Pending sp = state.pendingOf(field);
+                String already = sp == null ? null : sp.lastWriteText;
+                if (d.flushText != null && !d.flushText.isEmpty()
+                        && !d.flushText.equals(already)) {
+                    commit(app, appLabel, field, day, minute, d.flushText, d.comp,
+                            d.flushText.length(), System.currentTimeMillis());
+                    flushes++;
                 }
                 skippedDelete++;
-                // 仍然记住当前文本，但这一版不落盘
-                p.text = text;
-                p.chars = text.length();
-                p.comp = comp;
-                p.minute = minute;
                 return;
             }
-            if (added <= 0 && text.trim().isEmpty()) {
-                // 同上：只有在"上一步没在变短"时才救（那才是发送/按钮清空）
-                diag("CLEAR-B chars=" + p.chars + " prevShrunk=" + p.prevShrunk
-                        + " prev=<" + oneLine(p.text, 12) + "> -> "
-                        + (p.prevShrunk ? "skip(fragment)" : "flush"));
-                if (!p.prevShrunk) {
-                    flushPending(field, app, appLabel, day, minute);
-                } else {
+            case SKIP:
+                if (d.skip == CaptureState.Skip.FRAGMENT) {
                     skippedFragment++;
+                } else if (d.skip == CaptureState.Skip.DELETE) {
+                    skippedDelete++;
+                } else if (d.skip == CaptureState.Skip.NOISE) {
+                    skippedNoise++;
                 }
-                p.prevShrunk = false;
-                return;   // 全是空白，不值得占一条记录
-            }
-            // 新建的输入框里只有一个字符：多半是打了一个字又立刻删掉的碎片，不占记录
-            if (Prefs.minChars(this) > 1 && p.chars == 0 && text.trim().length() < 2) {
-                skippedNoise++;
                 return;
-            }
-            // 输入框的首条记录若是"默认占位文字"，不记录
-            if (p.chars == 0 && PlainText.looksLikeEmptyFieldHint(text)) {
-                skippedNoise++;
+            case COMMIT_NOW:
+                // 超大文本不值得挂在内存里，直接落盘
+                commit(app, appLabel, field, day, minute, d.text, d.comp, 0,
+                        System.currentTimeMillis());
                 return;
-            }
-            if (text.length() > CACHE_LIMIT) {
-                // 超大文本（罕见）：不去抖，直接写，免得内存里挂着几十兆
-                commit(app, appLabel, field, day, minute, text, comp, 0, now);
-                return;
-            }
-            int delta = text.length() - p.chars;
-            if (!text.equals(p.text)) {     // 重复事件不改趋势判断（同上）
-                p.prevShrunk = shrunkNow;
-            }
-            p.text = text;
-            p.chars = text.length();
-            p.comp = comp;
-            p.minute = minute;
-
-            if (p.runnable != null) {
-                handler.removeCallbacks(p.runnable);
-            }
-            final int deltaF = delta;
-            p.runnable = new Runnable() {
-                @Override
-                public void run() {
-                    commit(app, appLabel, field, day, minute, text, comp, deltaF,
-                            System.currentTimeMillis());
-                }
-            };
-            handler.postDelayed(p.runnable, DEBOUNCE_MS);
-
-            // 立刻刷新界面可见状态：让用户看到"确实在被记录"
-            lastApp = app;
-            lastAppLabel = appLabel;
-            lastField = field;
-            lastText = text;
-            lastTs = TS.format(new Date());
+            default:
+                break;      // SCHEDULE
         }
+        // 正常路径：挂起，去抖时间到再落盘
+        final String dText = d.text;
+        final boolean dComp = d.comp;
+        final int dDelta = d.delta;
+        Runnable task = new Runnable() {
+            @Override
+            public void run() {
+                commit(app, appLabel, field, day, minute, dText, dComp, dDelta,
+                        System.currentTimeMillis());
+            }
+        };
+        synchronized (LOCK) {
+            debounce.put(field, task);
+        }
+        handler.postDelayed(task, DEBOUNCE_MS);
+
+        // 立刻刷新界面可见状态：让用户看到"确实在被记录"
+        lastApp = app;
+        lastAppLabel = appLabel;
+        lastField = field;
+        lastText = dText;
+        lastTs = TS.format(new Date());
         sendStatsThrottled();
     }
 
@@ -769,13 +697,6 @@ public class TypelogService extends AccessibilityService {
      * 两种清法都会让输入框变空；只要判断"新出现的这段是不是刚才那段的截断"即可 ——
      * 这是内容层面的判据，与清空方式无关。
      */
-    private static boolean looksLikeDeletionFragment(Pending p, String text) {
-        if (p == null) {
-            return false;
-        }
-        // 判据本体在 CaptureDecisions（纯函数，可离线单测）
-        return CaptureDecisions.isDeletionFragment(p.chars, p.lastNonEmptyText, text);
-    }
 
 /** 往诊断环形缓冲写一行（供远程排查；缓冲满时自动丢弃最旧的） */
 /** 单行化并截断：诊断输出用，避免把换行塞进 logcat */
@@ -804,7 +725,7 @@ public class TypelogService extends AccessibilityService {
             return;
         }
         synchronized (LOCK) {
-            Pending p = pending.get(field);
+            CaptureState.Pending p = state.pendingOf(field);
             if (p != null) {
                 p.lastWriteText = null;
                 p.lastWriteMinute = null;
@@ -828,13 +749,13 @@ public class TypelogService extends AccessibilityService {
         final String text;
         final boolean comp;
         synchronized (LOCK) {
-            Pending p = pending.get(field);
+            CaptureState.Pending p = state.pendingOf(field);
             if (p == null || p.text.isEmpty() || p.text.equals(p.lastWriteText)) {
                 return;          // 没有待写内容，或这一版已经落过盘
             }
-            if (p.runnable != null) {
-                handler.removeCallbacks(p.runnable);
-                p.runnable = null;
+            Runnable pendingTask = debounce.remove(field);
+            if (pendingTask != null) {
+                handler.removeCallbacks(pendingTask);
             }
             text = p.text;
             comp = p.comp;
@@ -1179,7 +1100,7 @@ public class TypelogService extends AccessibilityService {
     private void commit(String app, String appLabel, String field, String day, String minute,
                         String text, boolean comp, int delta, long nowMs) {
         synchronized (LOCK) {
-            Pending p = pending.get(field);
+            CaptureState.Pending p = state.pendingOf(field);
             if (p == null) {
                 return;
             }
