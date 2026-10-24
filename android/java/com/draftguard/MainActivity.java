@@ -47,10 +47,10 @@ import java.util.zip.ZipOutputStream;
 public class MainActivity extends Activity {
 
 // 配色：只用三种前景色，靠字号而不是靠颜色做层次
-    private static final int COL_FG = 0xFFE8ECF3;      // 正文
-    private static final int COL_DIM = 0xFF8B95A7;     // 次要信息
-    private static final int COL_ACCENT = 0xFF5B9DFF;  // 可点/强调
-    private static final int COL_CARD = 0xFF232833;    // 卡片底色（比页面明显亮一些，才看得出是卡片）
+    static final int COL_FG = 0xFFE8ECF3;      // 正文
+    static final int COL_DIM = 0xFF8B95A7;     // 次要信息
+    static final int COL_ACCENT = 0xFF5B9DFF;  // 可点/强调
+    static final int COL_CARD = 0xFF232833;    // 卡片底色（比页面明显亮一些，才看得出是卡片）
 
     private LinearLayout pageRoot;          // 记录页的容器（= page1）
     private TextView summaryText;           // 顶部一行摘要
@@ -65,10 +65,11 @@ public class MainActivity extends Activity {
     /** 搜索关键词（空 = 不过滤）。搜索直接过滤列表，而不是另开一个结果区 */
     private String query = "";
 
-    private final Handler ui = new Handler(Looper.getMainLooper());
+    final Handler ui = new Handler(Looper.getMainLooper());
     private final SimpleDateFormat TS =
             new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US);
-    private final SimpleDateFormat DAY = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+    /** 按天分桶用的格式；适配器也要用（跨天显示日期），所以是包内可见 */
+    final SimpleDateFormat DAY = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
     private final SimpleDateFormat HM = new SimpleDateFormat("HH:mm", Locale.US);
 
     /** 看记录时是否显示原始逐条版本（默认合并成整段，见 Burst） */
@@ -98,7 +99,7 @@ public class MainActivity extends Activity {
     private int currentPage = 0;
 
     /** 应用图标缓存：null 表示"试过但拿不到"，避免反复请求 */
-    private final java.util.Map<String, android.graphics.drawable.Drawable> iconCache =
+    final java.util.Map<String, android.graphics.drawable.Drawable> iconCache =
             new java.util.HashMap<>();
 
     /** 第二页当前是否处于"某个应用的详情"状态（非 null 时显示详情） */
@@ -300,7 +301,7 @@ public class MainActivity extends Activity {
         listRecords.setSelector(new android.graphics.drawable.ColorDrawable(0x00000000));
         listRecords.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        adapter = new RecordAdapter();
+        adapter = new RecordAdapter(this, items);
         listRecords.setAdapter(adapter);
         pageRoot.addView(listRecords);
     }
@@ -317,7 +318,7 @@ public class MainActivity extends Activity {
     }
 
     /** 圆角卡片背景 */
-    private android.graphics.drawable.Drawable rounded(int fill, int radiusDp) {
+    android.graphics.drawable.Drawable rounded(int fill, int radiusDp) {
         android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
         g.setColor(fill);
         float r = dp(radiusDp);
@@ -561,7 +562,7 @@ public class MainActivity extends Activity {
      * 拿不到真实图标时的兜底：用应用名首字画一个带底色的圆角方块。
      * 比统一显示一个通用图标更容易分辨。
      */
-    private android.graphics.drawable.Drawable letterIcon(String label, String pkg) {
+    android.graphics.drawable.Drawable letterIcon(String label, String pkg) {
         int sz = dp(42);
         android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(
                 sz, sz, android.graphics.Bitmap.Config.ARGB_8888);
@@ -927,7 +928,7 @@ public class MainActivity extends Activity {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
     }
 
-    private int dp(int v) {
+    int dp(int v) {
         return Math.round(getResources().getDisplayMetrics().density * v);
     }
 
@@ -1118,7 +1119,7 @@ public class MainActivity extends Activity {
 
 /** 长按一条记录 → 确认后单点删除（隐私数据） */
 
-    private void confirmDelete(final Object item) {
+    void confirmDelete(final Object item) {
         final String app;
         final String field;
         final String fromTs;
@@ -2069,176 +2070,9 @@ public class MainActivity extends Activity {
      * 每行：应用图标 + 应用名 + 时间/字数/合并版本 + 正文。
      * 用 ListView 的视图回收，几百条也不会卡。
      */
-    private final class RecordAdapter extends android.widget.BaseAdapter {
-
-        @Override
-        public int getCount() {
-            return items.size();
-        }
-
-        @Override
-        public Object getItem(int position) {
-            return items.get(position);
-        }
-
-        @Override
-        public long getItemId(int position) {
-            return position;
-        }
-
-        @Override
-        public View getView(int position, View convert, ViewGroup parent) {
-            LinearLayout row;
-            if (convert instanceof LinearLayout) {
-                row = (LinearLayout) convert;
-            } else {
-                row = buildRow();
-            }
-            final Object item = items.get(position);
-            bindRow(row, item);
-            // 长按删除：隐私数据需要能单点删掉
-            row.setOnLongClickListener(v -> {
-                confirmDelete(item);
-                return true;
-            });
-            return row;
-        }
-
-        /** 行结构：图标 | （应用名 + 元信息） / 正文 */
-        private LinearLayout buildRow() {
-            LinearLayout row = new LinearLayout(MainActivity.this);
-            row.setOrientation(LinearLayout.VERTICAL);
-            row.setBackground(rounded(COL_CARD, 14));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMargins(dp(12), dp(4), dp(12), dp(4));
-            row.setLayoutParams(lp);
-            row.setPadding(dp(12), dp(10), dp(12), dp(12));
-
-            LinearLayout head = new LinearLayout(MainActivity.this);
-            head.setOrientation(LinearLayout.HORIZONTAL);
-            head.setGravity(Gravity.CENTER_VERTICAL);
-
-            ImageView icon = new ImageView(MainActivity.this);
-            int sz = dp(30);
-            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(sz, sz);
-            ilp.rightMargin = dp(10);
-            icon.setLayoutParams(ilp);
-            icon.setTag("icon");
-            head.addView(icon);
-
-            LinearLayout col = new LinearLayout(MainActivity.this);
-            col.setOrientation(LinearLayout.VERTICAL);
-            col.setLayoutParams(new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-            TextView name = new TextView(MainActivity.this);
-            name.setTextColor(COL_FG);
-            name.setTextSize(14);
-            name.setTag("name");
-            col.addView(name);
-
-            TextView meta = new TextView(MainActivity.this);
-            meta.setTextColor(COL_DIM);
-            meta.setTextSize(11);
-            meta.setPadding(0, dp(2), 0, 0);
-            meta.setTag("meta");
-            col.addView(meta);
-
-            head.addView(col);
-            row.addView(head);
-
-            TextView body = new TextView(MainActivity.this);
-            body.setTextColor(COL_FG);
-            body.setTextSize(14);
-            body.setPadding(0, dp(8), 0, 0);
-            body.setLineSpacing(dp(3), 1f);
-            body.setTag("body");
-            row.addView(body);
-            return row;
-        }
-
-        private void bindRow(LinearLayout row, Object item) {
-            ImageView icon = row.findViewWithTag("icon");
-            TextView name = row.findViewWithTag("name");
-            TextView meta = row.findViewWithTag("meta");
-            TextView body = row.findViewWithTag("body");
-
-            String app;
-            String head;
-            String text;
-            if (item instanceof Burst) {
-                Burst b = (Burst) item;
-                app = b.app;
-                StringBuilder h = new StringBuilder();
-                // 跨天查看时把日期带上，否则昨天的记录只显示时间会让人误会
-                String today = DAY.format(new Date());
-                if (!b.firstTs.startsWith(today)) {
-                    h.append(b.firstTs, 5, 10).append(" ");
-                }
-                h.append(b.firstTs, 11, 16);
-                if (!b.firstTs.substring(11, 16).equals(b.lastTs.substring(11, 16))) {
-                    h.append("–").append(b.lastTs, 11, 16);
-                }
-                h.append("　").append(b.text.length()).append(" 字");
-                if (b.versions > 1) {
-                    h.append("　合并 ").append(b.versions).append(" 版");
-                }
-                if (b.comp) {
-                    h.append("　未上屏");
-                }
-                head = h.toString();
-                text = b.text;
-            } else {
-                LogStore.Row r = (LogStore.Row) item;
-                app = r.app;
-                head = r.ts.substring(11, 19) + "　" + r.chars + " 字"
-                        + (r.comp ? "　未上屏" : "");
-                text = r.text;
-            }
-
-            name.setText(labelOf(app));
-            meta.setText(head);
-            body.setText(text);
-
-            android.graphics.drawable.Drawable d = iconCache.get(app);
-            if (d != null) {
-                icon.setImageDrawable(d);
-            } else {
-                icon.setImageDrawable(letterIcon(labelOf(app), app));
-                requestIcon(app);
-            }
-        }
-    }
-
-    private final java.util.Set<String> iconRequested = new java.util.HashSet<>();
-
-    /** 列表里第一次见到某个应用时，后台取一次它的图标 */
-    private void requestIcon(final String pkg) {
-        if (iconRequested.contains(pkg)) {
-            return;
-        }
-        iconRequested.add(pkg);
-        new Thread(() -> {
-            android.graphics.drawable.Drawable d = null;
-            try {
-                d = getPackageManager().getApplicationIcon(pkg);
-            } catch (Throwable ignored) {
-            }
-            synchronized (iconCache) {
-                iconCache.put(pkg, d);
-            }
-            ui.post(() -> {
-                if (adapter != null) {
-                    adapter.notifyDataSetChanged();
-                }
-            });
-        }, "typelog-icon").start();
-    }
-
     private final java.util.Map<String, String> labelCache = new java.util.HashMap<>();
 
-    private String labelOf(String pkg) {
+    String labelOf(String pkg) {
         String v = labelCache.get(pkg);
         if (v != null) {
             return v;
