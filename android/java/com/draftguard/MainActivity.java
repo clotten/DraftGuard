@@ -191,7 +191,7 @@ public class MainActivity extends Activity {
         } else {
             KeepAliveService.stop(this);
         }
-        buildRecordsPage();
+        refreshList();   // 首次调用会创建 RecordsPage 并装配视图
         buildToolsPage();
     }
 
@@ -226,88 +226,8 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ 界面
 
-    private void buildRecordsPage() {
-        pageRoot.removeAllViews();
-
-        // 1) 顶部摘要：一行小字。原来的状态/实时预览/统计/应用列表四张卡片
-        //    都收进了「更多 → 诊断」，日常只留这一行。
-        LinearLayout summaryRow = new LinearLayout(this);
-        summaryRow.setOrientation(LinearLayout.HORIZONTAL);
-        summaryRow.setGravity(Gravity.CENTER_VERTICAL);
-        summaryRow.setPadding(dp(14), dp(10), dp(10), dp(2));
-        summaryText = new TextView(this);
-        summaryText.setTextColor(COL_DIM);
-        summaryText.setTextSize(12);
-        summaryText.setText("正在检测…");
-        summaryText.setLayoutParams(new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        summaryRow.addView(summaryText);
-        TextView btnRefresh = link("刷新");
-        btnRefresh.setOnClickListener(v -> {
-            refreshSummary();
-            refreshList();
-        });
-        summaryRow.addView(btnRefresh);
-        pageRoot.addView(summaryRow);
-
-        // 2) 搜索行：搜索直接过滤下面的列表，不再另开一个结果区
-        LinearLayout searchRow = new LinearLayout(this);
-        searchRow.setOrientation(LinearLayout.HORIZONTAL);
-        searchRow.setGravity(Gravity.CENTER_VERTICAL);
-        searchRow.setPadding(dp(14), dp(4), dp(14), 0);
-        searchBox = new EditText(this);
-        searchBox.setHint("搜索记录过的文字…");
-        searchBox.setHintTextColor(COL_DIM);
-        searchBox.setTextColor(COL_FG);
-        searchBox.setTextSize(14);
-        searchBox.setSingleLine(true);
-        searchBox.setPadding(0, dp(8), 0, dp(8));
-        searchBox.setLayoutParams(new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        searchBox.setOnEditorActionListener((v, actionId, ev) -> {
-            doSearch();
-            return true;
-        });
-        searchRow.addView(searchBox);
-        Button btnSearch = button("搜");
-        btnSearch.setOnClickListener(v -> doSearch());
-        searchRow.addView(btnSearch);
-        pageRoot.addView(searchRow);
-
-        // 3) 操作行：最常用的三个，其余在「更多」
-        LinearLayout actionRow = new LinearLayout(this);
-        actionRow.setOrientation(LinearLayout.HORIZONTAL);
-        actionRow.setPadding(dp(14), dp(8), dp(14), dp(6));
-        btnRange = button(rangeLabel());
-        btnRange.setOnClickListener(v -> chooseRange());
-        actionRow.addView(btnRange);
-        btnRaw = button(showRawRows ? "看合并" : "看逐条");
-        btnRaw.setOnClickListener(v -> {
-            showRawRows = !showRawRows;
-            btnRaw.setText(showRawRows ? "看合并" : "看逐条");
-            refreshList();
-        });
-        actionRow.addView(btnRaw);
-        Button btnMore = button("更多");
-        btnMore.setOnClickListener(v -> showMore());
-        actionRow.addView(btnMore);
-        pageRoot.addView(actionRow);
-
-        // 4) 列表占满剩余高度。用 ListView 而不是往 TextView 里拼字符串 ——
-        //    几百条时后者是一整面文字墙，而且没有视图回收会卡。
-        listRecords = new android.widget.ListView(this);
-        listRecords.setDivider(null);
-        listRecords.setDividerHeight(0);
-        listRecords.setSelector(new android.graphics.drawable.ColorDrawable(0x00000000));
-        listRecords.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        adapter = new RecordAdapter(this, items);
-        listRecords.setAdapter(adapter);
-        pageRoot.addView(listRecords);
-    }
-
     /** 轻量文字按钮（用于"刷新"这类次要动作，不做成方块按钮） */
-    private TextView link(String text) {
+    TextView link(String text) {
         TextView t = new TextView(this);
         t.setText(text);
         t.setTextColor(COL_ACCENT);
@@ -454,6 +374,25 @@ public class MainActivity extends Activity {
         appsPage.refresh();
     }
 
+    /** 记录页（实现在 RecordsPage） */
+    private RecordsPage recordsPage;
+
+    /** 列表刷新：页面切换、删除后、收到采集广播时调用 */
+    private void refreshList() {
+        if (recordsPage == null) {
+            recordsPage = new RecordsPage(this, pageRoot);
+            recordsPage.build();
+        }
+        recordsPage.refreshList();
+    }
+
+    /** 顶部摘要刷新 */
+    private void refreshSummary() {
+        if (recordsPage != null) {
+            recordsPage.refreshSummary();
+        }
+    }
+
     TextView heading(String text) {
         TextView t = new TextView(this);
         t.setTextColor(Color.parseColor("#E8ECF3"));
@@ -518,7 +457,7 @@ public class MainActivity extends Activity {
         return b;
     }
 
-    private void toast(String s) {
+    void toast(String s) {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
     }
 
@@ -527,39 +466,6 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------ 刷新
-
-    /** 顶部一行摘要。原来的四张卡片内容都并进了「诊断」弹窗，这里只留最关键的两项 */
-    private void refreshSummary() {
-        boolean on = isServiceEnabled();
-        final StringBuilder sb = new StringBuilder();
-        sb.append(on ? "● 已开启 · 记录中" : "○ 未开启（点「更多 → 设置」或去系统设置开启）");
-        new Thread(() -> {
-            final LogStore store = new LogStore(getFilesDir(), 0);
-            final String today = DAY.format(new Date());
-            final java.util.List<LogStore.Row> rows = store.readDay(today, 0);
-            int n = 0;
-            for (LogStore.Row r : rows) {
-                if (!r.text.isEmpty()) {
-                    n++;
-                }
-            }
-            final int count = n;
-            final long bytes = store.totalBytes();
-            final String lastApp = rows.isEmpty() ? "" : rows.get(rows.size() - 1).app;
-            ui.post(() -> {
-                sb.append(" · 今天 ").append(count).append(" 条");
-                if (bytes > 0) {
-                    sb.append(" · ").append(bytes < 1024 ? bytes + " B" : (bytes / 1024) + " KB");
-                }
-                if (!lastApp.isEmpty()) {
-                    sb.append(" · 最近 ").append(labelOf(lastApp));
-                }
-                if (summaryText != null) {
-                    summaryText.setText(sb.toString());
-                }
-            });
-        }, "typelog-summary").start();
-    }
 
     /**
      * 重新读取并填充列表。
@@ -581,135 +487,6 @@ public class MainActivity extends Activity {
         }
         return sig;
     }
-
-    private void refreshList() {
-        if (adapter == null) {
-            return;
-        }
-        final int first = listRecords.getFirstVisiblePosition();
-        View v0 = listRecords.getChildAt(0);
-        final int top = v0 == null ? 0 : v0.getTop();
-        final boolean keep = listRecords.getCount() > 0;
-
-        new Thread(() -> {
-            final long t0 = System.currentTimeMillis();
-            LogStore store = new LogStore(getFilesDir(), 0);
-
-            // 时间范围先算出来，好据此**只读需要的日期**。
-            // 之前是先读完所有日期再过滤 —— 数据攒到几天后，每次刷新都要把几万个
-            // 版本的 JSON 全解析、全排序、全分段，于是"越大越慢"。
-            final long from = rangeMinutes <= 0 ? 0
-                    : System.currentTimeMillis() - rangeMinutes * 60_000L;
-            final String fromDay = from > 0
-                    ? new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-                          .format(new java.util.Date(from))
-                    : null;
-            final java.io.File baseDir = new java.io.File(getFilesDir(), "draftguard");
-            int daysRead = 0;
-
-            java.util.List<LogStore.Row> rows = new java.util.ArrayList<>();
-            int daysTotal = 0;
-            if (store.hasIndex()) {
-                // 索引可用：直接把"只要最新 N 行"交给 SQL ——
-                // 不读全部日期，也不把 2 万行搬进 Java 再砍掉
-                daysTotal = store.days().size();
-                rows.addAll(store.readNewest(from, SEGMENT_ROW_CAP * pagesLoaded));
-            }
-            for (String day : (store.hasIndex()
-                    ? java.util.Collections.<String>emptyList() : store.days())) {
-                if (fromDay != null && day.compareTo(fromDay) < 0) {
-                    continue;       // 这一天整体早于范围 -> 整个文件都不用读
-                }
-                // 按天缓存：签名没变就复用上次解析结果。
-                // 追加会改变文件长度 -> 签名变化 -> 自动重新解析，不会读到旧数据；
-                // 删除会重写文件 -> 长度变化 -> 同样自动失效。
-                long sig = daySignature(new java.io.File(baseDir, day));
-                Object[] cached = dayCache.get(day);
-                if (cached != null && ((Long) cached[0]) == sig) {
-                    @SuppressWarnings("unchecked")
-                    java.util.List<LogStore.Row> hit = (java.util.List<LogStore.Row>) cached[1];
-                    rows.addAll(hit);
-                } else {
-                    java.util.List<LogStore.Row> fr = store.readDay(day, 0);
-                    dayCache.put(day, new Object[]{sig, fr});
-                    rows.addAll(fr);
-                }
-                daysRead++;
-                if (rows.size() > 60000) {
-                    break;      // 安全阀：数据异常大时不至于卡死
-                }
-            }
-            java.util.Collections.sort(rows, (a, b) -> a.ts.compareTo(b.ts));
-            lastListDays = store.hasIndex() ? daysTotal : daysRead;
-            lastListRows = rows.size();
-            // 只把最新的 SEGMENT_ROW_CAP 行交给分段器：界面最多 400 段，
-            // 把 2 万行全分段只是白算。保留连续窗口，窗口内边界不动。
-            final int rowCap = SEGMENT_ROW_CAP * pagesLoaded;
-            if (rows.size() > rowCap) {
-                rows = new java.util.ArrayList<>(
-                        rows.subList(rows.size() - rowCap, rows.size()));
-                lastListSegmented = rowCap;
-            } else {
-                lastListSegmented = rows.size();
-            }
-            // 分层原则（本项目最该守住的一条）：
-            //   **过滤只作用于"显示"，不作用于"分段"。**
-            // 边界记录（发送标记 ev=send、空文本）是分段的唯一可靠依据，必须原样交给
-            // 分段器。曾经在这里把它们 continue 掉，分段器看不到任何边界，只能退回用
-            // 文本形态去猜 —— 实测后果："好 / 好不好 / 你不好 / 你不会" 四条独立消息
-            // 被合并成一条（界面显示「合并 4 版」）。
-            // 它们不会出现在结果里：Burst.groupNewestFirst 已负责过滤空段。
-            // 每页最多显示 400 段；"加载更早"每点一次多一页
-            final int segCap = 400 * pagesLoaded;
-            java.util.List<LogStore.Row> kept = new java.util.ArrayList<>();
-            for (LogStore.Row r : rows) {
-                final boolean boundary = "send".equals(r.ev) || r.text.isEmpty();
-                if (from > 0 && Burst.msOf(r.ts) < from) {
-                    continue;
-                }
-                if (!appFilter.isEmpty() && !appFilter.contains(r.app)) {
-                    continue;
-                }
-                if (!boundary && !query.isEmpty() && !r.text.contains(query)) {
-                    continue;
-                }
-                kept.add(r);
-            }
-
-            final java.util.List<Object> out = new java.util.ArrayList<>();
-            if (showRawRows) {
-                for (int i = kept.size() - 1; i >= 0 && out.size() < segCap; i--) {
-                    LogStore.Row rr = kept.get(i);
-                    if (rr.text.isEmpty()) {
-                        continue;      // 逐条视图只显示有正文的版本
-                    }
-                    out.add(rr);
-                }
-            } else {
-                java.util.List<Burst> bursts = Burst.groupNewestFirst(kept);
-                for (int i = 0; i < bursts.size() && out.size() < segCap; i++) {
-                    out.add(bursts.get(i));
-                }
-            }
-
-            lastListMs = System.currentTimeMillis() - t0;
-            ui.post(() -> {
-                items.clear();
-                items.addAll(out);
-                adapter.notifyDataSetChanged();
-                if (keep) {
-                    listRecords.setSelectionFromTop(first, top);
-                }
-                if (items.isEmpty()) {
-                    summaryText.setText(query.isEmpty()
-                            ? "这个范围内还没有记录。去任意 App 打几个字就会出现在这里。"
-                            : "没有找到包含「" + query + "」的记录。");
-                }
-            });
-        }, "typelog-list").start();
-    }
-
-
 
 /** 长按一条记录 → 确认后单点删除（隐私数据） */
 
@@ -777,20 +554,6 @@ public class MainActivity extends Activity {
         }, "typelog-delete").start();
     }
 
-    private void doSearch() {
-        if (searchBox == null) {
-            return;
-        }
-        query = searchBox.getText().toString().trim();
-        if (query.isEmpty()) {
-            toast("已取消筛选");
-        }
-        refreshList();
-        if (!query.isEmpty()) {
-            toast("已筛选包含「" + query + "」的记录");
-        }
-    }
-
         /** 诊断弹窗：原来页面上的状态/实时预览/统计/应用列表都放这里 */
     /** 诊断：重构时把原来页面上的内容都收到这里，注意别丢段落 */
                 private static String tail(String s, int n) {
@@ -841,7 +604,7 @@ public class MainActivity extends Activity {
      * 会把"已启用"误判成"未启用"。
      */
     /** 采集状态（委派给 ServiceState；判定依据存 lastStateProbe 供诊断显示） */
-    private int serviceState() {
+    int serviceState() {
         ServiceState.Result r = ServiceState.detect(this, TypelogService.running,
                 launchedAt, CONNECT_GRACE_MS);
         lastStateProbe = r.reason;
@@ -978,6 +741,25 @@ public class MainActivity extends Activity {
     }
 
     /** 时间范围选择：实测半天就有 918 段，全铺出来没法看，所以给了范围开关 */
+    /** 记录页的「时间范围」菜单（对话框仍住在宿主里，避免把 Prefs/弹窗逻辑搬过去） */
+    void chooseRangeFor(RecordsPage page) {
+        final int[] opts = {1440, 360, 60};
+        String[] labels = {"最近 24 小时", "最近 6 小时", "最近 1 小时"};
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("记录的时间范围")
+                .setItems(labels, (d, which) -> {
+                    page.setRangeMinutes(opts[which]);
+                    toast("已切换到「" + labels[which] + "」");
+                    page.refreshList();
+                })
+                .show();
+    }
+
+    /** 记录页的「更多」菜单 */
+    void showMoreFor(RecordsPage page) {
+        showMore();   // 更多菜单与页面状态无关，直接复用
+    }
+
     private void chooseRange() {
         // 没有「全部时间」了：数据攒多之后它要么很慢、要么只是个"看起来全"的假象。
         // 要翻更早的记录，去「应用」页按天翻 —— 那里一天一页，快且明确。
