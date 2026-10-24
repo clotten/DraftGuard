@@ -508,45 +508,9 @@ public class TypelogService extends AccessibilityService {
     }
 
     /** 找不到输入框时，描述一下当时窗口里到底有什么 */
+    /** 扫描当前窗口结构（诊断用）。实现在 NodeScanner */
     private String scanInfo(String pkg) {
-        StringBuilder sb = new StringBuilder();
-        try {
-            sb.append("包名 ").append(pkg).append("；");
-            AccessibilityNodeInfo root = getRootInActiveWindow();
-            if (root == null) {
-                sb.append("活动窗口拿不到（可能是输入法窗口或系统限制）");
-                return sb.toString();
-            }
-            sb.append("根节点 ").append(root.getClassName()).append("；");
-            AccessibilityNodeInfo f = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-            sb.append("输入焦点=").append(f == null ? "无"
-                    : f.getClassName() + (f.isEditable() ? "(可编辑)" : "(不可编辑)"));
-            int[] editables = new int[]{0};
-            int[] nodes = new int[]{0};
-            countTree(root, 0, nodes, editables);
-            sb.append("；窗口内控件 ").append(nodes[0])
-              .append(" 个，其中可编辑 ").append(editables[0]).append(" 个");
-        } catch (Throwable t) {
-            sb.append("扫描异常：").append(t);
-        }
-        return sb.toString();
-    }
-
-    private void countTree(AccessibilityNodeInfo node, int depth, int[] nodes, int[] editables) {
-        if (node == null || depth > 12) {
-            return;
-        }
-        nodes[0]++;
-        try {
-            if (node.isEditable()) {
-                editables[0]++;
-            }
-            int n = node.getChildCount();
-            for (int i = 0; i < n; i++) {
-                countTree(node.getChild(i), depth + 1, nodes, editables);
-            }
-        } catch (Throwable ignored) {
-        }
+        return NodeScanner.scan(this, pkg);
     }
 
     /**
