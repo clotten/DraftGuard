@@ -85,7 +85,7 @@ public class ProbeReceiver extends BroadcastReceiver {
                 }
                 case "export": {
                     LogStore st = new LogStore(context.getFilesDir(), 0);
-                    android.net.Uri u = Exporter.toPublicDownloads(context, st.root());
+                    android.net.Uri u = Exporter.toPublicDownloads(context, st);
                     Log.i(TAG, "export -> " + (u == null ? "失败" : u.toString())
                             + "  (Download/" + Exporter.PUBLIC_SUBDIR + ")");
                     break;
@@ -228,7 +228,7 @@ public class ProbeReceiver extends BroadcastReceiver {
         LogStore store = new LogStore(context.getFilesDir(), 0);
         int before = store.countAll();
         // 清空前备份到**公共下载目录**（用户可取回；私有目录里的备份等于没有）
-        android.net.Uri bak = Exporter.backupToPublicDownloads(context, store.root(), "preclear");
+        android.net.Uri bak = Exporter.backupToPublicDownloads(context, store, "preclear");
         store.clearAll();
         Log.i(TAG, "cleared: 已删除 " + before + " 条记录，剩余 " + store.countAll() + " 条");
         Log.i(TAG, "清空前备份：" + (bak == null

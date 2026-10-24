@@ -34,12 +34,26 @@ jobs:
 
       # 存储层测试跑在普通 JVM 上：不需要设备、不需要模拟器。
       # 这是本项目能在 CI 里一分钟跑完的关键（见 docs/TROUBLESHOOTING.md）。
-      - name: Run storage tests
+      # 存储层测试用 sqlite-jdbc 跑**真的 SQLite**。
+      # 不能用 android.jar 里的 SQLiteDatabase —— 那只有空桩，调用即抛 Stub!。
+      # 见 docs/SQLITE-ONLY.md「CI 其实能测数据库」。
+      - name: Fetch test jars
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/jars
+          base=https://repo1.maven.org/maven2
+          curl -fsSL "$base/org/xerial/sqlite-jdbc/3.46.0.0/sqlite-jdbc-3.46.0.0.jar" -o .cache/jars/sqlite-jdbc.jar
+          curl -fsSL "$base/org/slf4j/slf4j-api/2.0.13/slf4j-api-2.0.13.jar"            -o .cache/jars/slf4j-api.jar
+          curl -fsSL "$base/org/slf4j/slf4j-nop/2.0.13/slf4j-nop-2.0.13.jar"            -o .cache/jars/slf4j-nop.jar
+          ls -lh .cache/jars
+
+      - name: Run tests
         run: |
           set -euo pipefail
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
           AJ="$SDK/platforms/android-34/android.jar"
           BT=$(ls -d "$SDK"/build-tools/*/ | sort -V | tail -1)
+          JARS=.cache/jars/sqlite-jdbc.jar:.cache/jars/slf4j-api.jar:.cache/jars/slf4j-nop.jar
           echo "android.jar: $AJ"
           echo "build-tools: $BT"
 
@@ -50,9 +64,15 @@ jobs:
             android/java/com/draftguard/LogStore.java \
             android/java/com/draftguard/Record.java \
             android/java/com/draftguard/Json.java \
-            test/StoreTest.java
+            android/java/com/draftguard/Burst.java \
+            android/java/com/draftguard/PlainText.java \
+            test/SqlTest.java \
+            test/BurstTest.java
 
-          java -cp "build/test:$AJ" com.draftguard.StoreTest
+          echo "--- 存储层（真 SQLite，15 项）---"
+          java -cp "build/test:$AJ:$JARS" com.draftguard.SqlTest
+          echo "--- 分段规则（62 项）---"
+          java -cp "build/test:$AJ" com.draftguard.BurstTest
         # 有任何一项 FAIL 就返回非零，CI 直接红
 
       # 全量源码编译检查：确保整个 App 没有编译错误，

@@ -1,121 +1,174 @@
 package com.draftguard;
+
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
 import android.util.Log;
 
-
-import java.io.BufferedWriter;
-import java.io.FileOutputStream;
-import java.io.OutputStreamWriter;
-import java.io.BufferedReader;
+import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.InputStreamReader;
-import java.io.RandomAccessFile;
-import java.nio.charset.StandardCharsets;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
- * 存储层。
+ * 数据访问层：<b>只用 SQLite</b>。
  *
- * 目录结构（应用私有目录，其他应用读不到）：
- *   files/logs/<yyyy-MM-dd>/<app>.jsonl     按天 + 按 App 分文件，一行一条完整快照
- *   files/logs/<yyyy-MM-dd>/index.json     该天记录过的 App 与中文名
+ * <h3>为什么不再有 JSONL</h3>
+ * v2.37–v2.39 曾经是"JSONL 权威 + SQLite 索引"双路径，连续咬出三个 bug：
+ * <ul>
+ *   <li>每个实例各开一个连接 → {@code database is locked} → 静默降级回 JSONL，优化全废</li>
+ *   <li>迁移时没有应用显示名 → 界面退回显示包名</li>
+ *   <li>统计 SQL 少一个空格 → 静默回退慢路径，数字还算错</li>
+ * </ul>
+ * 共同点：同一份数据两个真相，任何不同步都表现为"看起来正常"。
+ * 现在只有一个真相：{@code draftguard.db}。JSONL 只作为<b>导出格式</b>保留。
  *
- * 我们的“准确”，靠的是三个设计：
- *   1) 每条记录存的是**输入框当前完整文本**，不是按键增量 —— 丢一次请求不会把文字拼错；
- *   2) 文件句柄常开 + 每次写完 flush —— 不做缓冲，进程被杀也不丢已写内容；
- *   3) 按“时-分”打桶，同一个 App 在某一分钟内的所有版本都留在同一文件里，事后按时段还原。
+ * <h3>可测试性</h3>
+ * 所有 SQL 都是 {@code static final} 常量 —— {@code test/SqlTest.java} 用 sqlite-jdbc
+ * 在普通 JVM 上执行同一批常量，所以"SQL 拼错"这类问题能进 CI。
  */
 final class LogStore {
 
-    private static final String TAG = "DraftGuardStore";
+    private static final String TAG = "LogStore";
+    static final String DB_NAME = "draftguard.db";
 
-    static final String PKG_SELF = "com.draftguard";
+    // ════════════════════════════════════════════ SQL（测试引用同一份）
 
-    /**
-     * 只跳过系统壳与"非应用窗口"。故意**不再跳过本应用自己**：
-     * 用户要求"在记录 App 里搜索时打的字也要记"。
-     * 输入法自己的候选栏之所以被跳过，是因为它的事件包名是输入法，会被下面的
-     * TypelogService 判定为 IME 后跳过。
-     */
-    private static final String[] SKIP_PKGS = {
-            "com.android.systemui",
-            "com.android.settings.intelligence",
-            "android",
+    static final String SQL_CREATE_ROWS =
+            "CREATE TABLE IF NOT EXISTS rows ("
+                    + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    + "ts TEXT, ms INTEGER NOT NULL, day TEXT, minute TEXT,"
+                    + "app TEXT NOT NULL, app_label TEXT, field TEXT, ev TEXT,"
+                    + "chars INTEGER, delta INTEGER, comp INTEGER,"
+                    + "text TEXT, detail TEXT)";
+
+    static final String SQL_INSERT =
+            "INSERT INTO rows(ts,ms,day,minute,app,app_label,field,ev,"
+                    + "chars,delta,comp,text,detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
+    static final String[] SQL_CREATE_INDEXES = {
+            "CREATE INDEX IF NOT EXISTS idx_ms  ON rows(ms DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_day ON rows(day, app)",
+            "CREATE INDEX IF NOT EXISTS idx_app ON rows(app, ms DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_fld ON rows(field, ms)",
     };
 
-    private static final Pattern TS = Pattern.compile("\"ts\":\"([^\"]*)\"");
-    private static final Pattern APP = Pattern.compile("\"app\":\"([^\"]*)\"");
-    private static final Pattern FIELD = Pattern.compile("\"field\":\"([^\"]*)\"");
-    private static final Pattern COMP = Pattern.compile("\"comp\":(true|false)");
-    private static final Pattern EV = Pattern.compile("\"ev\":\"([^\"]*)\"");
-    private static final Pattern TEXT = Pattern.compile("\"text\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+    private static final String COLS = "ts, minute, app, field, text, comp, chars, ev";
+
+    static final String SQL_READ_DAY =
+            "SELECT " + COLS + " FROM rows WHERE day = ? ORDER BY ms ASC";
+
+    static final String SQL_DAYS = "SELECT DISTINCT day FROM rows ORDER BY day DESC";
+
+    /** %s 放可选的时间下界（空串 或 " AND ms >= 123"） */
+    static final String SQL_READ_NEWEST =
+            "SELECT " + COLS + " FROM rows WHERE 1=1%s ORDER BY ms DESC LIMIT ?";
+
+    /** %s 放可选的时间下界 */
+    static final String SQL_READ_APP =
+            "SELECT " + COLS + " FROM rows WHERE app = ?%s ORDER BY ms DESC LIMIT ?";
+
+    static final String SQL_APP_DAYS =
+            "SELECT day FROM rows WHERE app = ? GROUP BY day ORDER BY day DESC";
+
+    static final String SQL_READ_APP_DAY =
+            "SELECT " + COLS + " FROM rows WHERE app = ? AND day = ? ORDER BY ms ASC";
+
+    /**
+     * %s 放可选的 " WHERE day IN (...)"。
+     * <b>FROM rows 后面和 GROUP BY 前面都必须有空格</b> —— v2.39.0 少了一个，
+     * 空 where 时拼成 {@code rowsGROUP BY}，语法错误被 catch 吞掉，静默回退慢路径。
+     */
+    static final String SQL_APPS_SUMMARY =
+            "SELECT app, MAX(app_label), COUNT(*), SUM(LENGTH(text)), MAX(ts),"
+                    + " COUNT(DISTINCT day), MAX(ms) FROM rows %s GROUP BY app ORDER BY MAX(ms) DESC";
+
+    /** %s 放可选的 " AND day = ?" */
+    static final String SQL_SEARCH =
+            "SELECT " + COLS + " FROM rows WHERE text LIKE ?%s ORDER BY ms DESC LIMIT ?";
+
+    static final String SQL_APP_LABELS =
+            "SELECT app, MAX(app_label) FROM rows WHERE day = ? GROUP BY app";
+
+    static final String SQL_COUNT = "SELECT COUNT(*) FROM rows";
+
+    static final String SQL_INVENTORY =
+            "SELECT app, COUNT(*), SUM(LENGTH(text)), MAX(ts), MAX(ms)"
+                    + " FROM rows WHERE day = ? GROUP BY app ORDER BY MAX(ms) DESC";
+
+    // ════════════════════════════════════════════ 进程内单例
+
+    private static LogStore shared;
+
+    /**
+     * 单例：多次 new 会开多个连接。实测多连接会 {@code database is locked}，
+     * 并触发 SQLiteConnectionPool 的连接泄漏告警。
+     */
+    static synchronized LogStore get(File filesDir) {
+        if (shared == null) {
+            shared = new LogStore(filesDir, 0);
+        }
+        return shared;
+    }
+
+    // ════════════════════════════════════════════ 状态
 
     private final File root;
     private final long retentionDays;
+    private SQLiteDatabase db;
 
-    // ---- 自证用：把最近一次真实写入的内容与统计留在内存里，界面直接显示 ----
-    /**
-     * 诊断镜像（静态）。
-     *
-     * 为什么需要：真正在写入的是**采集服务**持有的那个 LogStore 实例，
-     * 而界面（诊断面板）会另建一个实例去读 —— 读不到对方的实例字段，
-     * 全是 0 或空，看起来像"存储层坏了"。所以写入时同步一份静态快照。
-     */
+    static volatile String backend = "未初始化";
+    /** 诊断：库里有几行 */
+    static volatile long indexRows;
+    /** 诊断：本次从旧 JSONL 导入了多少行（0 = 无需迁移） */
+    static volatile int indexImported;
+    static volatile String diagLastBackupPath = "";
+    static volatile String diagLastError = "";
     static volatile String diagLastLine = "";
+    static volatile long diagLastWriteAt;
     static volatile long diagWrittenRows;
     static volatile long diagByteCount;
-    static volatile long diagLastWriteAt;
-    static volatile long diagSkippedRows;
-    static volatile String diagLastError = "";
-    static volatile String diagLastBackupPath = "";
+    static volatile int diagSkippedRows;
 
-    volatile String lastLine = "";
-    volatile long lastWriteAt;
-    volatile long writtenRows;
-    volatile long skippedRows;
-    volatile long byteCount;
-    volatile String lastError = "";
-    private final Map<String, RandomAccessFile> indexHandles = new HashMap<>();
-
-    /** 分钟桶 -> 已打开的文件，保持句柄常开 */
-    private final Map<String, RandomAccessFile> handles = new HashMap<>();
-    private final Map<String, Map<String, String>> dayIndexCache = new HashMap<>();
-
-    /**
-     * SQLite 查询索引。**可以为 null** ——
-     * android.database.sqlite 在普通 JVM 上只有空桩，所以在 CI / 离线测试里
-     * 创建必然失败，此时自动降级为"只用 JSONL"，行为与以前完全一致。
-     */
-    private SqlIndex idx;
-    /** 当前实际使用的读路径，给诊断面板显示 */
-    static volatile String backend = "JSONL";
-    /** 索引里当前有多少行（诊断用） */
-    static volatile long indexRows;
-    /** 上次从 JSONL 重建索引导入了多少行（诊断用） */
-    static volatile int indexImported;
+    /** 最近一次写入失败的原因（服务端诊断用） */
+    String lastError = "";
 
     LogStore(File filesDir, long retentionDays) {
         this.root = new File(filesDir, "draftguard");
         this.retentionDays = retentionDays;
-        if (!root.exists()) {
+        try {
             //noinspection ResultOfMethodCallIgnored
             root.mkdirs();
-        }
-        try {
-            idx = SqlIndex.get(filesDir);
+            db = SQLiteDatabase.openOrCreateDatabase(new File(filesDir, DB_NAME), null);
+            // WAL 写进库文件后会自动沿用；另一条连接开着时改 journal_mode 会报 locked，不致命
+            try {
+                db.execSQL("PRAGMA journal_mode=WAL");
+            } catch (Throwable ignored) {
+            }
+            try {
+                // 每条提交都落盘，与原先的 fsync 同等持久性
+                db.execSQL("PRAGMA synchronous=FULL");
+            } catch (Throwable ignored) {
+            }
+            db.execSQL(SQL_CREATE_ROWS);
+            for (String sql : SQL_CREATE_INDEXES) {
+                db.execSQL(sql);
+            }
             backend = "SQLite";
         } catch (Throwable t) {
-            // 普通 JVM（CI / 单元测试）会走到这里：自动降级，不影响任何行为
-            idx = null;
-            backend = "JSONL(降级)";
-            diagLastError = "索引不可用，已降级：" + t;
+            // 普通 JVM（没带 sqlite 驱动）会走到这里。
+            // 明确标记"不可用"，不再像以前那样静默降级成另一套读法。
+            db = null;
+            backend = "SQLite 不可用";
+            diagLastError = "打开数据库失败：" + t;
+            Log.w(TAG, "打开数据库失败", t);
         }
     }
 
@@ -123,154 +176,503 @@ final class LogStore {
         return root;
     }
 
-    static boolean isSkippedPackage(String pkg) {
-        if (pkg == null || pkg.isEmpty()) {
-            return true;
-        }
-        for (String s : SKIP_PKGS) {
-            if (s.equals(pkg)) {
-                return true;
-            }
-        }
-        return false;
+    /** 兼容旧调用方；现在只有一种后端 */
+    boolean hasIndex() {
+        return db != null;
     }
 
-    // ------------------------------------------------------------------ 写入
+    // ════════════════════════════════════════════ 写
 
-    /**
-     * 落一条记录。返回 false 表示这条被跳过（内容与上次完全相同且没跨分钟）。
-     * detail 可为 null。
-     */
-    synchronized boolean append(Record r) throws Exception {
-        File dayDir = new File(root, r.day);
-        if (!dayDir.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            dayDir.mkdirs();
+    /** 写入一条快照；已落盘才返回 true */
+    synchronized boolean append(Record r) {
+        if (db == null || r == null || !insert(r)) {
+            return false;
         }
-        File f = new File(dayDir, r.app + ".jsonl");
-        boolean existsBefore = f.exists();
-        RandomAccessFile raf = handles.get(r.app);
-        if (raf == null) {
-            raf = new RandomAccessFile(f, "rw");
-            raf.seek(raf.length());
-            handles.put(r.app, raf);
-        }
-        String line = Json.line(r);
-        byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
-        raf.write(bytes);
-        raf.getFD().sync();   // 真落盘，不是只进页缓存
-        byteCount += bytes.length;
-        lastLine = line;
-        lastWriteAt = System.currentTimeMillis();
-        writtenRows++;
-        // 同步静态诊断镜像：界面在另一个 LogStore 实例上看不到这些计数
-        diagByteCount = byteCount;
-        diagLastLine = lastLine;
-        diagLastWriteAt = lastWriteAt;
-        diagWrittenRows = writtenRows;
-        // 写穿索引：查询从这里走；JSONL 才是权威数据，索引随时可重建
-        if (idx != null && idx.insert(r)) {
-            indexRows++;
-        }
-
-        if (!existsBefore && r.appLabel != null && !r.appLabel.isEmpty()) {
-            indexPut(r.day, r.app, r.appLabel);
-        }
-        cleanupOldDays();
+        indexRows++;
+        diagWrittenRows = indexRows;
+        diagLastWriteAt = System.currentTimeMillis();
+        diagLastLine = r.text == null ? "" : r.text;
+        diagByteCount = onDisk();
+        lastError = "";
         return true;
     }
 
-    /** 同一天、同一 App 的 jsonl 已存在，就不必重复写 index */
-    private void indexPut(String day, String app, String label) {
-        Map<String, String> idx = dayIndex(day);
-        if (idx.containsKey(app)) {
-            return;
+    private boolean insert(Record r) {
+        try {
+            db.execSQL(SQL_INSERT, new Object[]{
+                    r.ts, r.ms, r.day, r.minute, r.app,
+                    r.appLabel == null ? "" : r.appLabel, r.field, r.ev,
+                    r.text == null ? 0 : r.text.length(), r.delta,
+                    r.comp ? 1 : 0, r.text, r.detail});
+            return true;
+        } catch (Throwable t) {
+            diagLastError = String.valueOf(t);
+            lastError = String.valueOf(t);
+            Log.w(TAG, "写入失败", t);
+            return false;
         }
-        idx.put(app, label);
-        writeIndex(day, idx);
     }
 
+    /** 补写某天的应用显示名（先写入数据、后拿到图标名的情况） */
     void putAppLabel(String day, String app, String label) {
-        if (label == null || label.isEmpty()) {
+        if (db == null || label == null || label.isEmpty()) {
             return;
         }
-        synchronized (this) {
-            Map<String, String> idx = dayIndex(day);
-            if (label.equals(idx.get(app))) {
-                return;
-            }
-            idx.put(app, label);
-            dayIndexCache.put(day, idx);   // 关键：也要更新内存缓存，否则下次读到的还是旧值
-            writeIndex(day, idx);
+        try {
+            db.execSQL("UPDATE rows SET app_label = ? WHERE day = ? AND app = ?",
+                    new Object[]{label, day, app});
+        } catch (Throwable ignored) {
         }
     }
 
-    private Map<String, String> dayIndex(String day) {
-        Map<String, String> cached = dayIndexCache.get(day);
-        if (cached != null) {
-            return cached;
+    /** 删除匹配的记录，返回删除行数。跨天也能处理。 */
+    synchronized int deleteRange(String app, String field, String fromTs, String toTs) {
+        if (db == null || app == null || app.isEmpty() || fromTs == null || fromTs.isEmpty()) {
+            return 0;
         }
-        Map<String, String> m = new LinkedHashMap<String, String>();
-        File f = new File(new File(root, day), "index.json");
-        if (f.exists()) {
-            try (FileInputStream in = new FileInputStream(f)) {
-                byte[] buf = new byte[(int) f.length()];
-                int n = in.read(buf);
-                m.putAll(Json.parseObject(new String(buf, 0, Math.max(n, 0), StandardCharsets.UTF_8)));
-            } catch (Exception ignored) {
+        String to = (toTs == null || toTs.isEmpty()) ? fromTs : toTs;
+        try {
+            int n;
+            if (field == null || field.isEmpty()) {
+                n = db.delete("rows", "app = ? AND ts >= ? AND ts <= ?",
+                        new String[]{app, fromTs, to});
+            } else {
+                n = db.delete("rows", "app = ? AND ts >= ? AND ts <= ? AND field = ?",
+                        new String[]{app, fromTs, to, field});
             }
+            indexRows = Math.max(0, indexRows - n);
+            return n;
+        } catch (Throwable t) {
+            diagLastError = String.valueOf(t);
+            return 0;
         }
-        dayIndexCache.put(day, m);
-        return m;
     }
+
+    /** 清空（先备份再删；备份路径写在 diagLastBackupPath） */
+    synchronized void clearAll() {
+        if (db == null) {
+            return;
+        }
+        File backup = backupAll();
+        if (backup != null) {
+            diagLastBackupPath = backup.getAbsolutePath();
+        }
+        try {
+            db.delete("rows", null, null);
+            db.execSQL("VACUUM");
+            indexRows = 0;
+        } catch (Throwable t) {
+            diagLastError = String.valueOf(t);
+        }
+    }
+
+    /** 按保留天数清理 */
+    synchronized void cleanupOldDays() {
+        if (db == null || retentionDays <= 0) {
+            return;
+        }
+        long cutoff = System.currentTimeMillis() - retentionDays * 86_400_000L;
+        try {
+            int n = db.delete("rows", "ms < ?", new String[]{String.valueOf(cutoff)});
+            if (n > 0) {
+                indexRows = Math.max(0, indexRows - n);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    // ════════════════════════════════════════════ 读
+
+    List<Row> readDay(String day, int max) {
+        String sql = SQL_READ_DAY + (max > 0 ? " LIMIT " + max : "");
+        return query(sql, new String[]{day}, false);
+    }
+
+    List<String> days() {
+        return strings(SQL_DAYS, null);
+    }
+
+    /** 最新 limit 行（正序返回，便于直接分段） */
+    List<Row> readNewest(long fromMs, int limit) {
+        String extra = fromMs > 0 ? " AND ms >= " + fromMs : "";
+        return query(String.format(SQL_READ_NEWEST, extra),
+                new String[]{String.valueOf(limit < 1 ? 100000 : limit)}, true);
+    }
+
+    /** 某个应用最新 limit 条（正序） */
+    List<Row> readApp(String app, long fromMs, int limit) {
+        String extra = fromMs > 0 ? " AND ms >= " + fromMs : "";
+        return query(String.format(SQL_READ_APP, extra),
+                new String[]{app, String.valueOf(limit < 1 ? 100000 : limit)}, true);
+    }
+
+    List<String> appDays(String app) {
+        return strings(SQL_APP_DAYS, new String[]{app});
+    }
+
+    List<Row> readAppDay(String app, String day) {
+        return query(SQL_READ_APP_DAY, new String[]{app, day}, false);
+    }
+
+    Map<String, AppStat> appsSummary(int maxDays) {
+        Map<String, AppStat> out = new LinkedHashMap<>();
+        Cursor c = null;
+        try {
+            if (db == null) {
+                return out;
+            }
+            String where = "";
+            if (maxDays > 0) {
+                List<String> ds = days();
+                StringBuilder in = new StringBuilder();
+                for (int i = 0; i < ds.size() && i < maxDays; i++) {
+                    if (in.length() > 0) {
+                        in.append(',');
+                    }
+                    in.append('\'').append(ds.get(i).replace("'", "''")).append('\'');
+                }
+                where = in.length() == 0 ? " WHERE 1=0 " : " WHERE day IN (" + in + ") ";
+            }
+            c = db.rawQuery(String.format(SQL_APPS_SUMMARY, where), null);
+            while (c.moveToNext()) {
+                AppStat a = new AppStat();
+                a.app = str(c, 0);
+                a.label = str(c, 1);
+                a.rows = c.getInt(2);
+                a.bytes = c.getLong(3);
+                a.lastTs = str(c, 4);
+                a.days = c.getInt(5);
+                out.put(a.app, a);
+            }
+        } catch (Throwable t) {
+            diagLastError = String.valueOf(t);
+        } finally {
+            close(c);
+        }
+        return out;
+    }
+
+    void search(String day, String query, int limit, List<Row> out) {
+        if (db == null || query == null || query.isEmpty()) {
+            return;
+        }
+        String extra = (day == null || day.isEmpty()) ? "" : " AND day = ?";
+        List<String> args = new ArrayList<>();
+        args.add("%" + query + "%");
+        if (!extra.isEmpty()) {
+            args.add(day);
+        }
+        args.add(String.valueOf(limit < 1 ? 500 : limit));
+        out.addAll(query(String.format(SQL_SEARCH, extra), args.toArray(new String[0]), true));
+    }
+
+    Map<String, String> labels(String day) {
+        Map<String, String> out = new LinkedHashMap<>();
+        Cursor c = null;
+        try {
+            if (db == null) {
+                return out;
+            }
+            c = db.rawQuery(SQL_APP_LABELS, new String[]{day});
+            while (c.moveToNext()) {
+                String app = str(c, 0);
+                String lab = str(c, 1);
+                out.put(app, lab.isEmpty() ? app : lab);
+            }
+        } catch (Throwable t) {
+            diagLastError = String.valueOf(t);
+        } finally {
+            close(c);
+        }
+        return out;
+    }
+
+    int countAll() {
+        Cursor c = null;
+        try {
+            if (db == null) {
+                return 0;
+            }
+            c = db.rawQuery(SQL_COUNT, null);
+            return c.moveToFirst() ? c.getInt(0) : 0;
+        } catch (Throwable t) {
+            return 0;
+        } finally {
+            close(c);
+        }
+    }
+
+    long totalBytes() {
+        return onDisk();
+    }
+
+    /** 诊断用：某天每个应用的行数 / 字数 / 最后一条 */
+    List<String> fileInventory(String day, int lastChars) {
+        List<String> out = new ArrayList<>();
+        Cursor c = null;
+        try {
+            if (db == null) {
+                return out;
+            }
+            c = db.rawQuery(SQL_INVENTORY, new String[]{day});
+            while (c.moveToNext()) {
+                out.add(String.format("%-26s %5d 行  %6d 字  最后 %s",
+                        str(c, 0), c.getInt(1), c.getLong(2), str(c, 3)));
+            }
+        } catch (Throwable t) {
+            diagLastError = String.valueOf(t);
+        } finally {
+            close(c);
+        }
+        return out;
+    }
+
+    static boolean isSkippedPackage(String pkg) {
+        return pkg == null || pkg.isEmpty();
+    }
+
+    /** 单例不在这里关闭（否则下次调用会重开连接、可能锁冲突） */
+    void closeAll() {
+    }
+
+    // ════════════════════════════════════════════ 导出（JSONL 只作为导出格式）
 
     /**
-     * 直写覆盖 index.json（不用"临时文件 + rename"：那种写法在部分设备上 rename 会失败，
-     * 而且失败是静默的，结果就是"记录在、中文名却永远填不上"）。
-     * 索引文件很小，直接覆盖 + fsync 更可靠，出错也能留下 lastError 供诊断。
+     * 导出整库为 zip，结构与旧版完全一致：{@code <day>/<app>.jsonl}。
+     * 分析脚本（merge_export / analyze / 提取整段）无需改动。
+     *
+     * @return 写入的条目数
      */
-    private void writeIndex(String day, Map<String, String> idx) {
-        RandomAccessFile raf = null;
+    int writeZip(OutputStream os) throws Exception {
+        int entries = 0;
+        ZipOutputStream zos = new ZipOutputStream(new BufferedOutputStream(os));
         try {
-            File dir = new File(root, day);
-            if (!dir.exists()) {
-                //noinspection ResultOfMethodCallIgnored
-                dir.mkdirs();
+            for (String day : days()) {
+                Map<String, List<Row>> byApp = new LinkedHashMap<>();
+                for (Row r : readDay(day, 0)) {
+                    List<Row> lst = byApp.get(r.app);
+                    if (lst == null) {
+                        lst = new ArrayList<>();
+                        byApp.put(r.app, lst);
+                    }
+                    lst.add(r);
+                }
+                for (Map.Entry<String, List<Row>> e : byApp.entrySet()) {
+                    zos.putNextEntry(new ZipEntry(day + "/" + e.getKey() + ".jsonl"));
+                    for (Row r : e.getValue()) {
+                        zos.write((jsonLine(day, r) + "\n").getBytes("UTF-8"));
+                    }
+                    zos.closeEntry();
+                    entries++;
+                }
             }
-            File f = new File(dir, "index.json");
-            raf = indexHandles.get(day);
-            if (raf == null) {
-                raf = new RandomAccessFile(f, "rw");
-                indexHandles.put(day, raf);
+            zos.flush();
+        } finally {
+            try {
+                zos.finish();
+            } catch (Throwable ignored) {
             }
-            byte[] bytes = Json.object(idx).getBytes(StandardCharsets.UTF_8);
-            raf.setLength(0);
-            raf.seek(0);
-            raf.write(bytes);
-            raf.getFD().sync();
+        }
+        return entries;
+    }
+
+    /** 单条 Row → 与旧格式一致的 JSON 行 */
+    static String jsonLine(String day, Row r) {
+        StringBuilder sb = new StringBuilder(160);
+        sb.append("{\"ts\":\"").append(r.ts).append('"');
+        sb.append(",\"ms\":").append(Burst.msOf(r.ts));
+        sb.append(",\"day\":\"").append(day).append('"');
+        sb.append(",\"minute\":\"").append(r.minute).append('"');
+        sb.append(",\"bucket\":\"").append(day).append(' ').append(r.minute).append('"');
+        sb.append(",\"app\":\"").append(r.app).append('"');
+        sb.append(",\"field\":\"").append(Json.esc(r.field)).append('"');
+        sb.append(",\"ev\":\"").append(r.ev).append('"');
+        sb.append(",\"chars\":").append(r.chars);
+        sb.append(",\"comp\":").append(r.comp);
+        sb.append(",\"text\":\"").append(Json.esc(r.text)).append('"');
+        sb.append('}');
+        return sb.toString();
+    }
+
+    /** 备份 zip（写在应用私有目录的上一级） */
+    File backupAll() {
+        File out = new File(root.getParentFile(), "DraftGuard-backup-" + stamp() + ".zip");
+        FileOutputStream fo = null;
+        try {
+            fo = new FileOutputStream(out);
+            writeZip(fo);
+            return out;
         } catch (Throwable t) {
-            lastError = "index 写入失败: " + t;
-            diagLastError = lastError;
+            diagLastError = "备份失败：" + t;
+            return null;
+        } finally {
+            try {
+                if (fo != null) {
+                    fo.flush();
+                    fo.close();
+                }
+            } catch (Throwable ignored) {
+            }
         }
     }
 
-    private void cleanupOldDays() {
-        if (retentionDays <= 0) {
-            return;
+    private static String stamp() {
+        return new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                .format(new java.util.Date());
+    }
+
+    // ════════════════════════════════════════════ 迁移：旧 JSONL → SQLite
+
+    /**
+     * 老版本的数据在 {@code draftguard/<日期>/<包名>.jsonl}。
+     * 首次升级时导入数据库，**只有全部导入成功才删除旧目录**。
+     *
+     * @return 导入行数（0 = 无需迁移）
+     */
+    synchronized int migrateFromJsonlIfNeeded() {
+        if (db == null) {
+            return 0;
         }
-        long cutoff = System.currentTimeMillis() - retentionDays * 24L * 3600_000L;
-        File[] days = root.listFiles();
-        if (days == null) {
-            return;
+        File[] kids = root.listFiles();
+        if (kids == null || kids.length == 0) {
+            return 0;
         }
-        for (File d : days) {
-            if (!d.isDirectory()) {
+        List<File> dirs = new ArrayList<>();
+        for (File d : kids) {
+            if (d.isDirectory() && d.getName().matches("\\d{4}-\\d{2}-\\d{2}")) {
+                dirs.add(d);
+            }
+        }
+        if (dirs.isEmpty()) {
+            return 0;
+        }
+        Collections.sort(dirs);
+
+        // ── 幂等保护（重要）──
+        // 场景 A：从"只有 JSONL"的老版本升级 → 库是空的 → 需要导入
+        // 场景 B：从"SQLite 索引"版本升上来 → 库里已经有全部数据，磁盘上的 JSONL
+        //         只是旧副本。这时如果还导入一遍，行数会翻倍。
+        int inDb = countAll();
+        int inFiles = 0;
+        for (File d : dirs) {
+            File[] fs0 = d.listFiles();
+            if (fs0 == null) {
                 continue;
             }
-            if (d.lastModified() < cutoff) {
-                deleteTree(d);
+            for (File f0 : fs0) {
+                if (f0.getName().endsWith(".jsonl")) {
+                    inFiles += readLines(f0).size();
+                }
             }
         }
+        if (inDb > 0) {
+            if (inDb >= inFiles) {
+                // 库里已经全了：删掉旧副本（这就是断舍离的那一下）
+                for (File d : dirs) {
+                    deleteTree(d);
+                }
+                indexRows = inDb;
+                Log.i(TAG, "库里已有 " + inDb + " 行（旧文件 " + inFiles + " 行），"
+                        + "已删除旧 JSONL 目录");
+            } else {
+                Log.w(TAG, "库里只有 " + inDb + " 行，旧文件有 " + inFiles
+                        + " 行 —— 为免重复，不导入也不删除，请人工确认");
+            }
+            return 0;
+        }
+
+        int imported = 0;
+        int fromFiles = 0;
+        for (File d : dirs) {
+            File[] fs = d.listFiles();
+            if (fs == null) {
+                continue;
+            }
+            for (File f : fs) {
+                if (!f.getName().endsWith(".jsonl")) {
+                    continue;
+                }
+                String app = f.getName().substring(0, f.getName().length() - 6);
+                for (String line : readLines(f)) {
+                    Record r = recordFrom(line, d.getName(), app);
+                    if (r == null) {
+                        continue;
+                    }
+                    fromFiles++;
+                    if (insert(r)) {
+                        imported++;
+                    }
+                }
+            }
+        }
+        indexImported = imported;
+        indexRows = countAll();
+        if (imported > 0 && imported == fromFiles) {
+            for (File d : dirs) {
+                deleteTree(d);
+            }
+            Log.i(TAG, "迁移完成：导入 " + imported + " 行，已删除旧 JSONL 目录");
+        } else if (fromFiles > 0) {
+            Log.w(TAG, "迁移未删旧文件：读到 " + fromFiles + " 行，只导入 " + imported + " 行");
+        }
+        return imported;
+    }
+
+    /** 一行 JSON → Record（字段与 Json.line 对称） */
+    static Record recordFrom(String line, String day, String app) {
+        Map<String, String> m = Json.parseObject(line);
+        if (m == null || m.isEmpty()) {
+            return null;
+        }
+        Record r = new Record();
+        r.ts = val(m, "ts");
+        if (r.ts.isEmpty()) {
+            return null;
+        }
+        r.day = val(m, "day").isEmpty() ? day : val(m, "day");
+        r.minute = val(m, "minute");
+        r.app = val(m, "app").isEmpty() ? app : val(m, "app");
+        r.appLabel = val(m, "app_label");
+        r.field = val(m, "field");
+        r.text = val(m, "text");
+        r.ev = val(m, "ev").isEmpty() ? "text" : val(m, "ev");
+        r.comp = "true".equals(val(m, "comp"));
+        try {
+            r.delta = Integer.parseInt(val(m, "delta"));
+        } catch (Throwable ignored) {
+        }
+        r.ms = Burst.msOf(r.ts);
+        r.detail = m.get("detail");
+        return r;
+    }
+
+    private static String val(Map<String, String> m, String k) {
+        String v = m.get(k);
+        return v == null ? "" : v;
+    }
+
+    private static List<String> readLines(File f) {
+        List<String> out = new ArrayList<>();
+        java.io.BufferedReader rd = null;
+        try {
+            rd = new java.io.BufferedReader(new java.io.InputStreamReader(
+                    new FileInputStream(f), java.nio.charset.StandardCharsets.UTF_8));
+            String line;
+            while ((line = rd.readLine()) != null) {
+                if (!line.trim().isEmpty()) {
+                    out.add(line);
+                }
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            try {
+                if (rd != null) {
+                    rd.close();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return out;
     }
 
     private static void deleteTree(File f) {
@@ -284,8 +686,91 @@ final class LogStore {
         f.delete();
     }
 
-    // ------------------------------------------------------------------ 读取
+    // ════════════════════════════════════════════ 内部实现
 
+    private long onDisk() {
+        try {
+            File f = new File(root.getParentFile(), DB_NAME);
+            long n = f.length();
+            n += new File(f.getPath() + "-wal").length();
+            n += new File(f.getPath() + "-shm").length();
+            return n;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** 结果只有一列文本时的通用查询 */
+    private List<String> strings(String sql, String[] args) {
+        List<String> out = new ArrayList<>();
+        Cursor c = null;
+        try {
+            if (db == null) {
+                return out;
+            }
+            c = db.rawQuery(sql, args);
+            while (c.moveToNext()) {
+                out.add(str(c, 0));
+            }
+        } catch (Throwable t) {
+            diagLastError = String.valueOf(t);
+        } finally {
+            close(c);
+        }
+        return out;
+    }
+
+    /** 统一查询入口；reverse=true 时把结果翻成正序 */
+    private List<Row> query(String sql, String[] args, boolean reverse) {
+        List<Row> out = new ArrayList<>();
+        Cursor c = null;
+        try {
+            if (db == null) {
+                return out;
+            }
+            c = db.rawQuery(sql, args);
+            while (c.moveToNext()) {
+                Row r = new Row();
+                r.ts = str(c, 0);
+                r.minute = str(c, 1);
+                r.app = str(c, 2);
+                r.field = str(c, 3);
+                r.text = str(c, 4);
+                r.comp = c.getInt(5) != 0;
+                r.chars = c.getInt(6);
+                String ev = str(c, 7);
+                r.ev = ev.isEmpty() ? "text" : ev;
+                out.add(r);
+            }
+        } catch (Throwable t) {
+            diagLastError = String.valueOf(t);
+            Log.w(TAG, "查询失败", t);
+        } finally {
+            close(c);
+        }
+        if (reverse) {
+            Collections.reverse(out);
+        }
+        return out;
+    }
+
+    private static String str(Cursor c, int i) {
+        String s = c.getString(i);
+        return s == null ? "" : s;
+    }
+
+    private static void close(Cursor c) {
+        try {
+            if (c != null) {
+                c.close();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    // ════════════════════════════════════════════ 数据对象
+
+    /** 一条记录（界面只需要这些字段） */
     static final class Row {
         String ts = "";
         String minute = "";
@@ -294,7 +779,6 @@ final class LogStore {
         String text = "";
         boolean comp;
         int chars;
-        /** 事件类型："text"（普通输入）或 "send"（用户点了发送/搜索/发布） */
         String ev = "text";
 
         String key() {
@@ -302,730 +786,17 @@ final class LogStore {
         }
     }
 
-    /** 当前是否在用 SQLite 索引（决定读路径） */
-    boolean hasIndex() {
-        return idx != null;
-    }
-
-    /**
-     * 只取最新的 limit 行（正序）。索引可用时是一次带索引的查询；
-     * 否则退回"按天全读 + 取尾部"，行为一致但慢一些。
-     */
-    List<Row> readNewest(long fromMs, int limit) {
-        if (idx != null) {
-            List<Row> fast = idx.readNewest(fromMs, limit);
-            if (!fast.isEmpty()) {
-                return fast;
-            }
-        }
-        List<Row> all = new ArrayList<>();
-        for (String day : days()) {
-            all.addAll(readDay(day, 0));
-        }
-        Collections.sort(all, (x, y) -> x.ts.compareTo(y.ts));
-        if (limit > 0 && all.size() > limit) {
-            return new ArrayList<>(all.subList(all.size() - limit, all.size()));
-        }
-        return all;
-    }
-
-    /** 只读某个应用的记录（正序）。索引可用时走索引，否则退回全扫 + 过滤。 */
-    List<Row> readApp(String app, long fromMs, int limit) {
-        if (idx != null) {
-            List<Row> fast = idx.readApp(app, fromMs, limit);
-            if (!fast.isEmpty()) {
-                return fast;
-            }
-        }
-        List<Row> all = new ArrayList<>();
-        for (String day : days()) {
-            for (Row r : readDay(day, 0)) {
-                if (app.equals(r.app)) {
-                    all.add(r);
-                }
-            }
-        }
-        if (limit > 0 && all.size() > limit) {
-            return new ArrayList<>(all.subList(all.size() - limit, all.size()));
-        }
-        return all;
-    }
-
-    /**
-     * 迁移后补齐应用显示名（只补空值，不会覆盖已有的）。
-     * @return 一共更新了多少行
-     */
-    synchronized int backfillLabels() {
-        if (idx == null) {
-            return 0;
-        }
-        int n = 0;
-        for (String day : idx.days()) {
-            Map<String, String> lab = labels(day);
-            for (Map.Entry<String, String> e : lab.entrySet()) {
-                n += idx.fillLabel(day, e.getKey(), e.getValue());
-            }
-        }
-        indexImported = n > 0 ? indexImported : indexImported;
-        return n;
-    }
-
-    /** 某个应用有记录的日期（新 → 旧） */
-    List<String> appDays(String app) {
-        if (idx != null) {
-            List<String> fast = idx.appDays(app);
-            if (!fast.isEmpty()) {
-                return fast;
-            }
-        }
-        java.util.LinkedHashMap<String, Boolean> seen = new java.util.LinkedHashMap<>();
-        for (String day : days()) {
-            for (Row r : readDay(day, 0)) {
-                if (app.equals(r.app)) {
-                    seen.put(day, Boolean.TRUE);
-                    break;
-                }
-            }
-        }
-        return new ArrayList<>(seen.keySet());
-    }
-
-    /** 某个应用在某一天的记录（正序） */
-    List<Row> readAppDay(String app, String day) {
-        if (idx != null) {
-            List<Row> fast = idx.readAppDay(app, day);
-            if (!fast.isEmpty()) {
-                return fast;
-            }
-        }
-        List<Row> out = new ArrayList<>();
-        for (Row r : readDay(day, 0)) {
-            if (app.equals(r.app)) {
-                out.add(r);
-            }
-        }
-        return out;
-    }
-
-    List<String> days() {
-        if (idx != null) {
-            List<String> fast = idx.days();
-            if (!fast.isEmpty()) {
-                return fast;
-            }
-        }
-
-        List<String> out = new ArrayList<>();
-        File[] ds = root.listFiles();
-        if (ds != null) {
-            for (File d : ds) {
-                if (d.isDirectory()) {
-                    out.add(d.getName());
-                }
-            }
-        }
-        Collections.sort(out);
-        Collections.reverse(out);
-        return out;
-    }
-
-    /** 单个应用的汇总（供"应用"页面显示图标 + 名字 + 条数） */
+    /** 单个应用的汇总 */
     static final class AppStat {
         String app = "";
         String label = "";
         int rows;
         long bytes;
-        /** 最近一条记录的时间（ISO 字符串，可直接比较大小） */
         String lastTs = "";
-        /** 出现过该应用的不同天数 */
         int days;
 
         String display() {
             return (label == null || label.isEmpty()) ? app : label;
         }
-    }
-
-    /**
-     * 汇总所有日期下各应用的记录量。
-     *
-     * 刻意**只数行、不解析 JSON** —— 应用可能累积几十天、上千条，
-     * 若逐条解析会很慢，而这里只需要"条数 / 体积 / 最近时间"。
-     *
-     * @param maxDays 最多回看多少天（0 = 全部）
-     */
-    Map<String, AppStat> appsSummary(int maxDays) {
-        if (idx != null) {
-            Map<String, AppStat> fast = idx.appsSummary(maxDays);
-            if (!fast.isEmpty()) {
-                return fast;
-            }
-        }
-
-        Map<String, AppStat> out = new LinkedHashMap<>();
-        List<String> ds = days();
-        int n = 0;
-        for (String day : ds) {
-            if (maxDays > 0 && n >= maxDays) {
-                break;
-            }
-            n++;
-            File dir = new File(root, day);
-            File[] files = dir.listFiles();
-            if (files == null) {
-                continue;
-            }
-            Map<String, String> idx = dayIndex(day);
-            for (File f : files) {
-                String name = f.getName();
-                if (!name.endsWith(".jsonl")) {
-                    continue;
-                }
-                String app = name.substring(0, name.length() - ".jsonl".length());
-                AppStat st = out.get(app);
-                if (st == null) {
-                    st = new AppStat();
-                    st.app = app;
-                    out.put(app, st);
-                }
-                st.days++;
-                st.bytes += f.length();
-                // 数行 + 取最后一条的时间（顺序读一遍，不做 JSON 解析）
-                String last = null;
-                int cnt = 0;
-                try (BufferedReader br = new BufferedReader(
-                        new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        if (line.isEmpty()) {
-                            continue;
-                        }
-                        // "发送"标记不是内容，不计入条数
-                        if (line.contains("\"ev\":\"send\"")) {
-                            continue;
-                        }
-                        cnt++;
-                        last = line;
-                    }
-                } catch (Exception ignored) {
-                }
-                st.rows += cnt;
-                if (last != null) {
-                    String ts = group(TS, last);
-                    if (ts.compareTo(st.lastTs) > 0) {
-                        st.lastTs = ts;
-                    }
-                }
-                String lb = idx.get(app);
-                if (lb != null && !lb.isEmpty() && (st.label == null || st.label.isEmpty())) {
-                    st.label = lb;
-                }
-            }
-        }
-        return out;
-    }
-
-    /**
-     * 删除匹配的记录（用于"隐私数据单点删除"）。
-     *
-     * 匹配条件：应用 = app，且 ts 落在 [fromTs, toTs] 内，
-     * 且（field 为空 或 field 相同）。跨天也能处理 —— 会遍历所有日期目录。
-     *
-     * 做法：逐行读出 → 保留不匹配的行 → 写临时文件 → 原子替换。
-     * **刻意不备份**：这是"把隐私删掉"的操作，留一份备份就自相矛盾了。
-     *
-     * 注意：本方法会**替换文件**。调用方必须在返回后让服务端关闭旧的
-     * RandomAccessFile 句柄（否则服务会继续往被替换掉的旧文件里追加，等于丢记录）。
-     *
-     * @return 实际删除的行数
-     */
-    synchronized int deleteRange(String app, String field, String fromTs, String toTs) {
-        if (app == null || app.isEmpty() || fromTs == null || fromTs.isEmpty()) {
-            return 0;
-        }
-        final String to = (toTs == null || toTs.isEmpty()) ? fromTs : toTs;
-        int removed = 0;
-        for (String day : days()) {
-            File f = new File(new File(root, day), app + ".jsonl");
-            if (!f.exists() || f.length() == 0) {
-                continue;
-            }
-            File tmp = new File(f.getParentFile(), app + ".jsonl.tmp");
-            int hit = 0;
-            BufferedReader rd = null;
-            BufferedWriter wr = null;
-            try {
-                rd = new BufferedReader(new InputStreamReader(
-                        new FileInputStream(f), StandardCharsets.UTF_8), 8192);
-                wr = new BufferedWriter(new OutputStreamWriter(
-                        new FileOutputStream(tmp), StandardCharsets.UTF_8), 8192);
-                String line;
-                while ((line = rd.readLine()) != null) {
-                    if (line.trim().isEmpty()) {
-                        continue;
-                    }
-                    String ts = group(TS, line);
-                    String ap = group(APP, line);
-                    boolean drop = false;
-                    if (ts != null && ap != null && app.equals(ap)
-                            && ts.compareTo(fromTs) >= 0 && ts.compareTo(to) <= 0) {
-                        if (field == null || field.isEmpty()) {
-                            drop = true;
-                        } else {
-                            String fd = group(FIELD, line);
-                            drop = field.equals(fd == null ? "" : fd);
-                        }
-                    }
-                    if (drop) {
-                        hit++;
-                    } else {
-                        wr.write(line);
-                        wr.write('\n');
-                    }
-                }
-                wr.flush();
-            } catch (Exception e) {
-                lastError = String.valueOf(e);
-                hit = 0;      // 中途失败：不替换，保持原文件
-            } finally {
-                try { if (wr != null) wr.close(); } catch (Throwable ignored) { }
-                try { if (rd != null) rd.close(); } catch (Throwable ignored) { }
-            }
-            if (hit <= 0) {
-                //noinspection ResultOfMethodCallIgnored
-                tmp.delete();
-                continue;
-            }
-            // 原子替换；失败则退回"把内容写回原文件"
-            if (!tmp.renameTo(f)) {
-                try {
-                    byte[] keep = readAllBytes(tmp);
-                    FileOutputStream fo = new FileOutputStream(f, false);
-                    try {
-                        fo.write(keep);
-                        fo.getFD().sync();
-                    } finally {
-                        fo.close();
-                    }
-                    //noinspection ResultOfMethodCallIgnored
-                    tmp.delete();
-                } catch (Exception e) {
-                    lastError = String.valueOf(e);
-                    continue;
-                }
-            }
-            removed += hit;
-        }
-        // 索引也要删：否则"已经删掉的记录"仍会从索引里被读出来
-        if (idx != null && removed > 0) {
-            long n = idx.deleteRange(app, field, fromTs, toTs);
-            indexRows = Math.max(0, indexRows - n);
-        }
-        return removed;
-    }
-
-    /** 读整个文件（只用于删除时的"退回写回"路径） */
-    private static byte[] readAllBytes(File f) throws Exception {
-        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
-        FileInputStream in = new FileInputStream(f);
-        try {
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                bo.write(buf, 0, n);
-            }
-        } finally {
-            try { in.close(); } catch (Throwable ignored) { }
-        }
-        return bo.toByteArray();
-    }
-
-    List<Row> readDay(String day, int max) {
-        if (idx != null) {
-            List<Row> fast = idx.readDay(day, max);
-            if (!fast.isEmpty()) {
-                return fast;
-            }
-        }
-
-        List<Row> out = new ArrayList<>();
-        File dir = new File(root, day);
-        File[] fs = dir.listFiles();
-        if (fs == null) {
-            return out;
-        }
-        List<File> files = new ArrayList<>();
-        for (File f : fs) {
-            if (f.getName().endsWith(".jsonl")) {
-                files.add(f);
-            }
-        }
-        Collections.sort(files);
-        for (File f : files) {
-            if (max > 0 && out.size() >= max) {
-                break;
-            }
-            readFile(f, null, out, max);
-        }
-        return out;
-    }
-
-    void search(String day, String query, int limit, List<Row> out) {
-        if (idx != null) {
-            int before = out.size();
-            idx.search(day, query, limit, out);
-            if (out.size() > before) {
-                return;
-            }
-        }
-
-        File dir = new File(root, day);
-        File[] fs = dir.listFiles();
-        if (fs == null) {
-            return;
-        }
-        List<File> files = new ArrayList<>();
-        for (File f : fs) {
-            if (f.getName().endsWith(".jsonl")) {
-                files.add(f);
-            }
-        }
-        Collections.sort(files);
-        Collections.reverse(files);   // 新的优先
-        for (File f : files) {
-            if (out.size() >= limit) {
-                break;
-            }
-            // 关键：limit 是"总共最多要几条"，由 readFile 自己控制增量，
-            // 不能因为前一个文件读够了就跳过后面的文件（那会漏掉其它 App 的记录）
-            readFile(f, query, out, limit);
-        }
-    }
-
-    private void readFile(File f, String query, List<Row> out, int max) {
-        try (BufferedReader br = new BufferedReader(
-                new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                if (line.isEmpty()) {
-                    continue;
-                }
-                String text = group(TEXT, line);
-                if (query != null && !query.isEmpty() && !text.contains(query)) {
-                    continue;
-                }
-                Row r = new Row();
-                r.ts = group(TS, line);
-                r.app = f.getName().replace(".jsonl", "");
-                r.field = group(FIELD, line);
-                r.comp = "true".equals(group(COMP, line));
-                String ev = group(EV, line);
-                r.ev = ev == null || ev.isEmpty() ? "text" : ev;
-                r.text = text;
-                r.chars = text.length();
-                r.minute = r.ts.length() >= 16 ? r.ts.substring(11, 16) : "";
-                out.add(r);
-                if (max > 0 && out.size() >= max) {
-                    return;   // 只停"这个文件"，进而是"整个搜索"的增量上限
-                }
-            }
-        } catch (Exception ignored) {
-        }
-    }
-
-    private static String group(Pattern p, String line) {
-        Matcher m = p.matcher(line);
-        if (!m.find()) {
-            return "";
-        }
-        String raw = m.group(1);
-        // 这些字段的原始内容本来就是 JSON 字符串转义过的，这里还原
-        return unescape(raw);
-    }
-
-    static String unescape(String s) {
-        StringBuilder sb = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c != '\\' || i + 1 >= s.length()) {
-                sb.append(c);
-                continue;
-            }
-            char n = s.charAt(++i);
-            switch (n) {
-                case 'n': sb.append('\n'); break;
-                case 't': sb.append('\t'); break;
-                case 'r': sb.append('\r'); break;
-                case 'b': sb.append('\b'); break;
-                case 'f': sb.append('\f'); break;
-                case '"': sb.append('"'); break;
-                case '\\': sb.append('\\'); break;
-                case '/': sb.append('/'); break;
-                case 'u':
-                    if (i + 4 < s.length()) {
-                        try {
-                            sb.append((char) Integer.parseInt(s.substring(i + 1, i + 5), 16));
-                            i += 4;
-                        } catch (NumberFormatException ignored) {
-                        }
-                    }
-                    break;
-                default: sb.append(n);
-            }
-        }
-        return sb.toString();
-    }
-
-    synchronized void closeAll() {
-        for (RandomAccessFile raf : handles.values()) {
-            try {
-                raf.close();
-            } catch (Exception ignored) {
-            }
-        }
-        handles.clear();
-        for (RandomAccessFile raf : indexHandles.values()) {
-            try {
-                raf.close();
-            } catch (Exception ignored) {
-            }
-        }
-        indexHandles.clear();
-    }
-
-    synchronized long totalBytes() {
-        if (idx != null) {
-            long n = idx.bytesOnDisk();
-            if (n > 0) {
-                return n;
-            }
-        }
-
-        return sizeOf(root);
-    }
-
-    private static long sizeOf(File f) {
-        if (f.isFile()) {
-            return f.length();
-        }
-        long n = 0;
-        File[] kids = f.listFiles();
-        if (kids != null) {
-            for (File k : kids) {
-                n += sizeOf(k);
-            }
-        }
-        return n;
-    }
-
-    /**
-     * 原始文件清单：直接列出磁盘上每个 App 文件的行数与最后一条内容。
-     * 绕开所有缓存与界面逻辑，是"到底存没存下来"最硬的证据。
-     */
-    List<String> fileInventory(String day, int lastChars) {
-        List<String> out = new ArrayList<String>();
-        File dir = new File(root, day);
-        File[] fs = dir.listFiles();
-        if (fs == null || fs.length == 0) {
-            out.add("（" + day + " 目录不存在或为空）");
-            return out;
-        }
-        List<File> files = new ArrayList<File>();
-        for (File f : fs) {
-            if (f.getName().endsWith(".jsonl")) {
-                files.add(f);
-            }
-        }
-        Collections.sort(files);
-        for (File f : files) {
-            List<Row> rows = new ArrayList<Row>();
-            readFile(f, null, rows, 0);
-            String last = rows.isEmpty() ? "" : rows.get(rows.size() - 1).text;
-            if (last.length() > lastChars) {
-                last = "…" + last.substring(last.length() - lastChars);
-            }
-            out.add(f.getName().replace(".jsonl", "")
-                    + "\n    行数 " + rows.size() + "　" + f.length() + " 字节"
-                    + "\n    最后一条：" + last.replace("\n", "⏎"));
-        }
-        if (out.isEmpty()) {
-            out.add("（" + day + " 目录下没有任何 jsonl 文件）");
-        }
-        return out;
-    }
-    /** 供服务层使用：今天各 App 的中文名 */
-    Map<String, String> labels(String day) {
-        synchronized (this) {
-            return new LinkedHashMap<>(dayIndex(day));
-        }
-    }
-
-    /**
-     * 清空全部记录。
-     *
-     * 必须先关掉所有文件句柄：记录文件是常开句柄的，Linux 上"删掉仍被打开的文件"
-     * 不会真的释放，日志目录会看起来清空了却还占着空间。所以顺序是：
-     * 关句柄 → 递归删目录 → 重建空目录 → 清掉内存里的索引缓存与统计。
-     */
-    /**
-     * 清空前先把现有记录打包备份到同一目录下的 backup-<时间>.zip。
-     *
-     * 为什么要有它：清空是**不可恢复**操作，而它可能被误触发
-     * （比如调试时用命令行 clear）。备份成本几 KB，但能救回全部历史。
-     */
-    File backupAll() {
-        try {
-            File[] days = root.listFiles();
-            boolean has = false;
-            if (days != null) {
-                for (File d : days) {
-                    if (d.isDirectory() && d.listFiles() != null && d.listFiles().length > 0) {
-                        has = true;
-                        break;
-                    }
-                }
-            }
-            if (!has) {
-                return null;
-            }
-            String name = "backup-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",
-                    java.util.Locale.US).format(new java.util.Date()) + ".zip";
-            File out = new File(root, name);
-            try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
-                    new java.io.BufferedOutputStream(new java.io.FileOutputStream(out)))) {
-                for (File day : days) {
-                    if (!day.isDirectory()) {
-                        continue;
-                    }
-                    File[] files = day.listFiles();
-                    if (files == null) {
-                        continue;
-                    }
-                    for (File f : files) {
-                        if (!f.isFile()) {
-                            continue;
-                        }
-                        zos.putNextEntry(new java.util.zip.ZipEntry(day.getName() + "/" + f.getName()));
-                        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
-                            byte[] buf = new byte[8192];
-                            int n;
-                            while ((n = in.read(buf)) > 0) {
-                                zos.write(buf, 0, n);
-                            }
-                        }
-                        zos.closeEntry();
-                    }
-                }
-            }
-            lastBackup = out.getName();
-            Log.i(TAG, "清空前已备份：" + out.getAbsolutePath());
-            return out;
-        } catch (Throwable t) {
-            lastError = "备份失败: " + t;
-            return null;
-        }
-    }
-
-    /** 最近一次备份文件名（供界面显示） */
-    volatile String lastBackup = "";
-    /** 最近一次备份的完整路径（清空前自动生成） */
-    volatile String lastBackupPath = "";
-
-    synchronized void clearAll() {
-        // 先把现有记录打包备份，再删。清空不可恢复，而它可能被误触发
-        // （调试时用命令行 clear 就是一次真实误操作）。备份只有几 KB，却能救回全部历史。
-        File backup = backupAll();
-        if (backup != null) {
-            File keep = new File(root.getParentFile(), backup.getName());
-            if (backup.renameTo(keep)) {
-                lastBackupPath = keep.getAbsolutePath();
-            } else {
-                lastBackupPath = backup.getAbsolutePath();
-            }
-            diagLastBackupPath = lastBackupPath;
-        }
-        closeAll();
-        deleteTree(root);
-        //noinspection ResultOfMethodCallIgnored
-        root.mkdirs();
-        dayIndexCache.clear();
-        if (idx != null) {
-            idx.clearAll();
-            indexRows = 0;
-        }
-        synchronized (this) {
-            lastLine = "";
-            lastWriteAt = 0;
-            writtenRows = 0;
-            skippedRows = 0;
-            byteCount = 0;
-            lastError = "";
-        }
-    }
-    /**
-     * 索引为空但盘上有 JSONL → 从 JSONL 重建索引（升级后的一次性迁移）。
-     *
-     * 为什么这样安全：
-     *   · JSONL 是权威数据，重建只是"照着它再写一份索引"
-     *   · 中途失败最多是索引不全，读方法会回退到读文件，数据不会丢
-     *   · 旧 JSONL 一个字节都不动
-     *
-     * @return 本次导入的行数（0 表示无需迁移）
-     */
-    synchronized int rebuildIndexIfEmpty() {
-        if (idx == null) {
-            return 0;
-        }
-        long have = idx.count();
-        if (have > 0) {
-            indexRows = have;
-            return 0;
-        }
-        int imported = 0;
-        // 此刻索引是空的，days()/readDay() 会走文件路径，正好用来当迁移源
-        List<String> ds = days();
-        for (String day : ds) {
-            List<Row> rs = readDay(day, 0);
-            if (!rs.isEmpty()) {
-                imported += idx.insertRows(rs);
-            }
-        }
-        indexRows = idx.count();
-        indexImported = imported;
-        Log.i("LogStore", "索引重建完成：导入 " + imported + " 行，索引现有 " + indexRows + " 行");
-        return imported;
-    }
-
-    /** 当前盘上有多少条记录（清理前给用户看一眼） */
-    int countAll() {
-        if (idx != null) {
-            long n = idx.count();
-            if (n >= 0) {
-                return (int) n;
-            }
-        }
-
-        int n = 0;
-        File[] days = root.listFiles();
-        if (days == null) {
-            return 0;
-        }
-        for (File d : days) {
-            if (!d.isDirectory()) {
-                continue;
-            }
-            File[] fs = d.listFiles();
-            if (fs == null) {
-                continue;
-            }
-            for (File f : fs) {
-                if (!f.getName().endsWith(".jsonl")) {
-                    continue;
-                }
-                List<Row> rows = new ArrayList<Row>();
-                readFile(f, null, rows, 0);
-                n += rows.size();
-            }
-        }
-        return n;
     }
 }

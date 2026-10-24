@@ -182,15 +182,8 @@ public class TypelogService extends AccessibilityService {
         // 放在服务自己的 IO 线程做，不挡界面；失败也只是索引不全，读会回退到文件。
         handler.post(() -> {
             try {
-                store.rebuildIndexIfEmpty();
-                // 迁移过来的行没有应用显示名，补一次（之后由 append 正常写入）
-                if (!Prefs.dbLabelsBackfilled(this)) {
-                    int fixed = store.backfillLabels();
-                    Prefs.setDbLabelsBackfilled(this);
-                    if (fixed > 0) {
-                        Log.i(TAG, "补齐应用显示名：" + fixed + " 行");
-                    }
-                }
+                // 老版本的 JSONL 数据导进数据库（校验通过才删旧目录）
+                store.migrateFromJsonlIfNeeded();
             } catch (Throwable t) {
                 Log.w(TAG, "重建索引失败（不影响记录，读会回退到文件）", t);
             }

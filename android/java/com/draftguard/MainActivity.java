@@ -2191,7 +2191,7 @@ public class MainActivity extends Activity {
         toast("正在导出到「下载/DraftGuard」…");
         new Thread(() -> {
             LogStore store = new LogStore(getFilesDir(), 0);
-            final Uri uri = Exporter.toPublicDownloads(this, store.root());
+            final Uri uri = Exporter.toPublicDownloads(this, store);
             ui.post(() -> {
                 if (uri == null) {
                     toast("导出失败：无法写入下载目录，可以改用「分享 zip」");
@@ -2210,7 +2210,7 @@ public class MainActivity extends Activity {
             String err = null;
             try {
                 LogStore store = new LogStore(getFilesDir(), 0);
-                zip = Exporter.toCache(this, store.root());
+                zip = Exporter.toCache(this, store);
             } catch (Throwable t) {
                 err = t.toString();
             }
@@ -2280,7 +2280,7 @@ public class MainActivity extends Activity {
                         new Thread(() -> {
                             LogStore s2 = new LogStore(getFilesDir(), 0);
                             // 先备份到公共下载目录，用户可随时取回
-                            Exporter.backupToPublicDownloads(this, s2.root(), "preclear");
+                            Exporter.backupToPublicDownloads(this, s2, "preclear");
                             s2.clearAll();
                             ui.post(() -> {
                                 toast("已清除 " + total + " 条记录，之后新打的字会重新记录");
