@@ -117,6 +117,18 @@ public class MainActivity extends Activity {
     // 要看全部，用「全部时间」按钮主动切换（那时慢是有意的）。
     private int rangeMinutes = 1440;
 
+    /**
+     * 每次最多把多少行交给分段器。
+     *
+     * 为什么要有这个上限：界面最多显示 400 段，而"全部时间"可能有 2 万多行 ——
+     * 把 2 万行全部分段的唯一效果是算完之后被 400 条的上限截掉。
+     * 取最新 6000 行足够产出 400 段以上，且把"越大越慢"从线性变成常数。
+     *
+     * 注意：这是**范围裁剪**，不是过滤 —— 保留的是连续的最新一段窗口，
+     * 窗口内的分段边界（发送标记/清空）一个都不动，不违反分层原则。
+     */
+    private static final int SEGMENT_ROW_CAP = 6000;
+
     /** 按天缓存的解析结果：day -> {签名, List<Row>}；签名由该日各 jsonl 的长度+修改时间算出 */
     private static final java.util.Map<String, Object[]> dayCache = new java.util.HashMap<>();
 
@@ -124,6 +136,7 @@ public class MainActivity extends Activity {
     static volatile long lastListMs;
     static volatile int lastListDays;
     static volatile int lastListRows;
+    static volatile int lastListSegmented;
 
     /** 应用筛选（空 = 全部） */
     private final java.util.Set<String> appFilter = new java.util.HashSet<>();
@@ -859,6 +872,15 @@ public class MainActivity extends Activity {
             java.util.Collections.sort(rows, (a, b) -> a.ts.compareTo(b.ts));
             lastListDays = daysRead;
             lastListRows = rows.size();
+            // 只把最新的 SEGMENT_ROW_CAP 行交给分段器：界面最多 400 段，
+            // 把 2 万行全分段只是白算。保留连续窗口，窗口内边界不动。
+            if (rows.size() > SEGMENT_ROW_CAP) {
+                rows = new java.util.ArrayList<>(
+                        rows.subList(rows.size() - SEGMENT_ROW_CAP, rows.size()));
+                lastListSegmented = SEGMENT_ROW_CAP;
+            } else {
+                lastListSegmented = rows.size();
+            }
             // 分层原则（本项目最该守住的一条）：
             //   **过滤只作用于"显示"，不作用于"分段"。**
             // 边界记录（发送标记 ev=send、空文本）是分段的唯一可靠依据，必须原样交给
@@ -1775,9 +1797,14 @@ public class MainActivity extends Activity {
         sb.append("跳过同分钟去重(内容未变)：").append(TypelogService.skippedDedup).append("\n");
         sb.append("跳过清空后的删除碎片：").append(TypelogService.skippedFragment).append("\n");
         // 列表加载耗时：数据攒多后"越大越慢"，这里是能直接看出优化效果的观察点
+        sb.append("存储后端：").append(LogStore.backend)
+          .append("　索引 ").append(LogStore.indexRows).append(" 行")
+          .append(LogStore.indexImported > 0 ? "（本次从 JSONL 导入 " + LogStore.indexImported + " 行）" : "")
+          .append("\n");
         sb.append("列表加载耗时：").append(lastListMs).append(" ms（")
           .append(lastListDays).append(" 天 / ")
-          .append(lastListRows).append(" 个版本）\n");
+          .append(lastListRows).append(" 个版本，实际分段 ")
+          .append(lastListSegmented).append(" 行）\n");
         sb.append("跳过(设置里排除的)：").append(TypelogService.skippedIgnored).append("\n");
         sb.append("跳过(其它原因)：").append(TypelogService.skippedOther).append("\n");
         sb.append("跳过密码框：").append(TypelogService.skippedPassword).append("\n");

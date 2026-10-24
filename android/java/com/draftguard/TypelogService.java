@@ -178,6 +178,15 @@ public class TypelogService extends AccessibilityService {
         worker.start();
         handler = new Handler(worker.getLooper());
         store = new LogStore(getFilesDir(), Prefs.retentionDays(this));
+        // 升级后第一次启动：把已有的 JSONL 灌进 SQLite 查询索引。
+        // 放在服务自己的 IO 线程做，不挡界面；失败也只是索引不全，读会回退到文件。
+        handler.post(() -> {
+            try {
+                store.rebuildIndexIfEmpty();
+            } catch (Throwable t) {
+                Log.w(TAG, "重建索引失败（不影响记录，读会回退到文件）", t);
+            }
+        });
         Log.i(TAG, "采集服务已连接，数据目录：" + store.root().getAbsolutePath());
         Prefs.setServiceEnabledAt(this, System.currentTimeMillis());
         startPolling();

@@ -88,12 +88,34 @@ final class LogStore {
     private final Map<String, RandomAccessFile> handles = new HashMap<>();
     private final Map<String, Map<String, String>> dayIndexCache = new HashMap<>();
 
+    /**
+     * SQLite 查询索引。**可以为 null** ——
+     * android.database.sqlite 在普通 JVM 上只有空桩，所以在 CI / 离线测试里
+     * 创建必然失败，此时自动降级为"只用 JSONL"，行为与以前完全一致。
+     */
+    private SqlIndex idx;
+    /** 当前实际使用的读路径，给诊断面板显示 */
+    static volatile String backend = "JSONL";
+    /** 索引里当前有多少行（诊断用） */
+    static volatile long indexRows;
+    /** 上次从 JSONL 重建索引导入了多少行（诊断用） */
+    static volatile int indexImported;
+
     LogStore(File filesDir, long retentionDays) {
         this.root = new File(filesDir, "draftguard");
         this.retentionDays = retentionDays;
         if (!root.exists()) {
             //noinspection ResultOfMethodCallIgnored
             root.mkdirs();
+        }
+        try {
+            idx = new SqlIndex(filesDir);
+            backend = "SQLite";
+        } catch (Throwable t) {
+            // 普通 JVM（CI / 单元测试）会走到这里：自动降级，不影响任何行为
+            idx = null;
+            backend = "JSONL(降级)";
+            diagLastError = "索引不可用，已降级：" + t;
         }
     }
 
@@ -146,6 +168,10 @@ final class LogStore {
         diagLastLine = lastLine;
         diagLastWriteAt = lastWriteAt;
         diagWrittenRows = writtenRows;
+        // 写穿索引：查询从这里走；JSONL 才是权威数据，索引随时可重建
+        if (idx != null && idx.insert(r)) {
+            indexRows++;
+        }
 
         if (!existsBefore && r.appLabel != null && !r.appLabel.isEmpty()) {
             indexPut(r.day, r.app, r.appLabel);
@@ -277,6 +303,13 @@ final class LogStore {
     }
 
     List<String> days() {
+        if (idx != null) {
+            List<String> fast = idx.days();
+            if (!fast.isEmpty()) {
+                return fast;
+            }
+        }
+
         List<String> out = new ArrayList<>();
         File[] ds = root.listFiles();
         if (ds != null) {
@@ -316,6 +349,13 @@ final class LogStore {
      * @param maxDays 最多回看多少天（0 = 全部）
      */
     Map<String, AppStat> appsSummary(int maxDays) {
+        if (idx != null) {
+            Map<String, AppStat> fast = idx.appsSummary(maxDays);
+            if (!fast.isEmpty()) {
+                return fast;
+            }
+        }
+
         Map<String, AppStat> out = new LinkedHashMap<>();
         List<String> ds = days();
         int n = 0;
@@ -470,6 +510,11 @@ final class LogStore {
             }
             removed += hit;
         }
+        // 索引也要删：否则"已经删掉的记录"仍会从索引里被读出来
+        if (idx != null && removed > 0) {
+            long n = idx.deleteRange(app, field, fromTs, toTs);
+            indexRows = Math.max(0, indexRows - n);
+        }
         return removed;
     }
 
@@ -490,6 +535,13 @@ final class LogStore {
     }
 
     List<Row> readDay(String day, int max) {
+        if (idx != null) {
+            List<Row> fast = idx.readDay(day, max);
+            if (!fast.isEmpty()) {
+                return fast;
+            }
+        }
+
         List<Row> out = new ArrayList<>();
         File dir = new File(root, day);
         File[] fs = dir.listFiles();
@@ -513,6 +565,14 @@ final class LogStore {
     }
 
     void search(String day, String query, int limit, List<Row> out) {
+        if (idx != null) {
+            int before = out.size();
+            idx.search(day, query, limit, out);
+            if (out.size() > before) {
+                return;
+            }
+        }
+
         File dir = new File(root, day);
         File[] fs = dir.listFiles();
         if (fs == null) {
@@ -628,6 +688,13 @@ final class LogStore {
     }
 
     synchronized long totalBytes() {
+        if (idx != null) {
+            long n = idx.bytesOnDisk();
+            if (n > 0) {
+                return n;
+            }
+        }
+
         return sizeOf(root);
     }
 
@@ -776,6 +843,10 @@ final class LogStore {
         //noinspection ResultOfMethodCallIgnored
         root.mkdirs();
         dayIndexCache.clear();
+        if (idx != null) {
+            idx.clearAll();
+            indexRows = 0;
+        }
         synchronized (this) {
             lastLine = "";
             lastWriteAt = 0;
@@ -785,8 +856,49 @@ final class LogStore {
             lastError = "";
         }
     }
+    /**
+     * 索引为空但盘上有 JSONL → 从 JSONL 重建索引（升级后的一次性迁移）。
+     *
+     * 为什么这样安全：
+     *   · JSONL 是权威数据，重建只是"照着它再写一份索引"
+     *   · 中途失败最多是索引不全，读方法会回退到读文件，数据不会丢
+     *   · 旧 JSONL 一个字节都不动
+     *
+     * @return 本次导入的行数（0 表示无需迁移）
+     */
+    synchronized int rebuildIndexIfEmpty() {
+        if (idx == null) {
+            return 0;
+        }
+        long have = idx.count();
+        if (have > 0) {
+            indexRows = have;
+            return 0;
+        }
+        int imported = 0;
+        // 此刻索引是空的，days()/readDay() 会走文件路径，正好用来当迁移源
+        List<String> ds = days();
+        for (String day : ds) {
+            List<Row> rs = readDay(day, 0);
+            if (!rs.isEmpty()) {
+                imported += idx.insertRows(rs);
+            }
+        }
+        indexRows = idx.count();
+        indexImported = imported;
+        Log.i("LogStore", "索引重建完成：导入 " + imported + " 行，索引现有 " + indexRows + " 行");
+        return imported;
+    }
+
     /** 当前盘上有多少条记录（清理前给用户看一眼） */
     int countAll() {
+        if (idx != null) {
+            long n = idx.count();
+            if (n >= 0) {
+                return (int) n;
+            }
+        }
+
         int n = 0;
         File[] days = root.listFiles();
         if (days == null) {
