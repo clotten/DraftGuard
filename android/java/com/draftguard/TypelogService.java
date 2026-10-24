@@ -664,7 +664,7 @@ public class TypelogService extends AccessibilityService {
             }
             // 本事件是否"变短"。注意：清空事件本身也是变短，所以不能用它自己判断，
             // 要用**上一个事件**的判断（见下面的 prevShrunk）。
-            final boolean shrunkNow = p.chars > 0 && text.length() < p.chars;
+            final boolean shrunkNow = CaptureDecisions.isShrink(p.chars, text);
             // 用户要求：删除操作不记录。倒着加的输入法（如某些九宫格）会先出现占位字符，
             // 所以同长度但内容不同时按"新增"处理，只有真的变短才算删除。
             int added = 0;
@@ -709,7 +709,7 @@ public class TypelogService extends AccessibilityService {
                     // 实测：每次删除，输入法会先补发一个"内容相同"的重复事件；
                     // 若让它把 prevShrunk 覆盖成 false，紧接着的清空就会被误判成
                     // "发送/按钮清空"，从而把删除残渣（仅剩的「A」）当成草稿写进记录。
-                    if (!text.equals(p.text)) {
+                    if (CaptureDecisions.shouldUpdateTrend(text, p.text)) {
                         p.prevShrunk = shrunkNow;
                     }
                 }
@@ -806,14 +806,11 @@ public class TypelogService extends AccessibilityService {
      * 这是内容层面的判据，与清空方式无关。
      */
     private static boolean looksLikeDeletionFragment(Pending p, String text) {
-        if (p == null || text == null || text.isEmpty()) {
+        if (p == null) {
             return false;
         }
-        if (p.chars != 0) {
-            return false;      // 只有"刚被清空"之后才可能产生碎片
-        }
-        String before = p.lastNonEmptyText;
-        return before != null && before.length() > text.length() && before.startsWith(text);
+        // 判据本体在 CaptureDecisions（纯函数，可离线单测）
+        return CaptureDecisions.isDeletionFragment(p.chars, p.lastNonEmptyText, text);
     }
 
 /** 往诊断环形缓冲写一行（供远程排查；缓冲满时自动丢弃最旧的） */
@@ -1222,8 +1219,11 @@ public class TypelogService extends AccessibilityService {
             if (p == null) {
                 return;
             }
-            // 同一分钟内这一版已经写过了，就不再重复落盘
-            if (text.equals(p.lastWriteText) && minute.equals(p.lastWriteMinute)) {
+            // 同一分钟内这一版已经写过了，就不再重复落盘。
+            // 判据在 CaptureDecisions（纯函数）—— 它挡的是轮询重复读，
+            // 所以只能"收窄"，不能整体移除（见该类注释里 53 个版本的事故）。
+            if (CaptureDecisions.isSameMinuteDedup(text, minute,
+                    p.lastWriteText, p.lastWriteMinute)) {
                 skippedDedup++;
                 return;
             }
