@@ -20,10 +20,10 @@ a swipe-away, or a page reload. One character at a time, on-device only.
 
 ```
 WeChat ─┐
-QQ     ─┤                                 files/logs/2026-10-08/
-Tavern ─┼──►  AccessibilityService  ──►     ├── com.tencent.mm.jsonl
-Browser─┤     (350 ms debounce, fsync)       ├── com.draftguard.jsonl
-Notes  ─┘                                   └── index.json
+QQ     ─┤
+Tavern ─┼──►  AccessibilityService  ──►  draftguard.db (SQLite)
+Browser─┤     (350 ms debounce)            └── table rows + 4 indexes
+Notes  ─┘
 ```
 
 ---
@@ -177,6 +177,8 @@ with the same key preserves them**; uninstalling, clearing app data, or changing
 does not. The in-app "clear all records" action backs up to `Download/DraftGuard/backup/` first.
 
 ## Data format
+
+Storage is a single SQLite database (`files/draftguard.db`), WAL + `synchronous=FULL`. The JSONL layout below is the **export** format — the analysis scripts read it, the app never does.
 
 ```
 files/draftguard/

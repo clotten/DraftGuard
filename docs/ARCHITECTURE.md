@@ -33,7 +33,7 @@ AccessibilityEvent(TYPE_VIEW_TEXT_CHANGED)
         └─ de-duplicate & debounce (350 ms per field)
                 │
                 └─ HandlerThread("draftguard-io")
-                        └─ LogStore.append()  →  <day>/<package>.jsonl  (fsync)
+                        └─ LogStore.append()  →  draftguard.db (SQLite, WAL + synchronous=FULL)
 ```
 
 A 900 ms polling pass over the active window runs alongside the event path, for apps that emit
@@ -57,7 +57,7 @@ minute is not re-written) and by the fact that only the last version of a burst 
 ## Why per-minute, per-app files
 
 ```
-files/logs/2026-10-08/com.tencent.mm.jsonl
+files/draftguard.db  ← 表 rows，带 4 个索引
 ```
 
 - One file per app keeps a noisy app from burying a quiet one (this was learned the hard way —
@@ -73,7 +73,8 @@ android/
 ├── AndroidManifest.xml                     no permissions declared
 ├── java/com/draftguard/
 │   ├── TypelogService.java                 capture: events, debounce, fallbacks, polling
-│   ├── LogStore.java                       storage: files, minute buckets, index, search
+│   ├── LogStore.java                       storage: SQLite 读写/查询/导出/迁移
+│   ├── SqlSchema.java                      schema + 全部 SQL 常量（测试引用同一批）
 │   ├── Json.java                           minimal JSON writer/parser (replaces org.json)
 │   ├── MainActivity.java                   UI: status, preview, search, diagnostics, settings
 │   ├── Prefs.java                          settings

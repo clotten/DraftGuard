@@ -19,10 +19,10 @@ DraftGuard 是一个安卓应用：它持续记录你在**任意应用**输入�
 
 ```
 微信  ─┐
-QQ    ─┤                                 files/draftguard/2026-10-08/
-酒馆  ─┼──►  无障碍服务        ──►         ├── com.tencent.mm.jsonl
-浏览器─┤     (350ms 去抖 + fsync)           ├── com.draftguard.jsonl
-笔记  ─┘                                   └── index.json
+QQ    ─┤
+酒馆  ─┼──►  无障碍服务   ──►  draftguard.db（SQLite）
+浏览器─┤     (350ms 去抖)          └── 表 rows + 4 个索引
+笔记  ─┘
 ```
 
 ---
@@ -164,6 +164,8 @@ SDK 路径会自动探测（先看 `ANDROID_HOME`，再找常见安装位置）�
 `Download/DraftGuard/backup/`。
 
 ## 数据格式
+
+存储是一个 SQLite 数据库（`files/draftguard.db`），WAL + `synchronous=FULL`。下面的 JSONL 结构是**导出格式** —— 分析脚本读它，应用自己不读。
 
 ```
 files/draftguard/
