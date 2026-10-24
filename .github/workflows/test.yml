@@ -68,9 +68,13 @@ jobs:
             android/java/com/draftguard/PlainText.java \
             android/java/com/draftguard/SendBoundary.java \
             android/java/com/draftguard/CaptureDecisions.java \
+            android/java/com/draftguard/TextUtil.java \
+            android/java/com/draftguard/ToolsText.java \
+            android/java/com/draftguard/Prefs.java \
             test/SqlTest.java \
             test/BurstTest.java \
-            test/DecisionsTest.java
+            test/DecisionsTest.java \
+            test/ToolsTextTest.java
 
           echo "--- 存储层（真 SQLite，15 项）---"
           java -cp "build/test:$AJ:$JARS" com.draftguard.SqlTest
@@ -78,6 +82,8 @@ jobs:
           java -cp "build/test:$AJ" com.draftguard.BurstTest
           echo "--- 采集决策（19 项）---"
           java -cp "build/test:$AJ" com.draftguard.DecisionsTest
+          echo "--- 工具页文案（12 项）---"
+          java -cp "build/test:$AJ" com.draftguard.ToolsTextTest
         # 有任何一项 FAIL 就返回非零，CI 直接红
 
       # 全量源码编译检查：确保整个 App 没有编译错误，

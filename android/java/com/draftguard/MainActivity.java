@@ -1355,79 +1355,33 @@ public class MainActivity extends Activity {
         if (statusView == null) {
             return;
         }
-        String app = TextUtils.isEmpty(TypelogService.lastAppLabel)
-                ? TypelogService.lastApp : TypelogService.lastAppLabel;
-        if (TextUtils.isEmpty(TypelogService.lastTs)) {
-            setCardText(liveView, "实时预览（最近一次输入）",
-                    "还没有捕获到输入。开启服务后，去任意 App 打几个字试试。");
-        } else {
-            setCardText(liveView, "实时预览（最近一次输入）",
-                    "时间：" + TypelogService.lastTs + "\n"
-                    + "应用：" + (TextUtils.isEmpty(app) ? "（未知）" : app) + "\n"
-                    + "输入框：" + TypelogService.lastField + "\n"
-                    + "当前字数：" + TypelogService.lastText.length() + "\n"
-                    + "—— 最近一次内容 ——\n" + tail(TypelogService.lastText, 200));
-        }
-        setCardText(statusView, "采集状态", serviceStateText()
-                + "\n本次会话落盘 " + TypelogService.written + " 条（服务重启会归零，历史不会丢）"
-                + "\n收到事件 " + TypelogService.evAll
-                + "（文本变化 " + TypelogService.evText + "）"
-                + "\n取到文本 " + TypelogService.evCaptured
-                + "　兜底找回 " + TypelogService.evTraverseHit
-                + "　跳过密码框 " + TypelogService.skippedPassword);
+        // 文案全部由 ToolsText 生成（纯函数，可单测）；这里只负责读库和贴到卡片上
+        ToolsText.Live live = new ToolsText.Live();
+        live.ts = TypelogService.lastTs;
+        live.app = TypelogService.lastApp;
+        live.appLabel = TypelogService.lastAppLabel;
+        live.field = TypelogService.lastField;
+        live.text = TypelogService.lastText;
+        setCardText(liveView, "实时预览（最近一次输入）", ToolsText.livePreview(live));
+
+        ToolsText.Status st = new ToolsText.Status();
+        st.written = TypelogService.written;
+        st.evAll = TypelogService.evAll;
+        st.evText = TypelogService.evText;
+        st.evCaptured = TypelogService.evCaptured;
+        st.evTraverseHit = TypelogService.evTraverseHit;
+        st.skippedPassword = TypelogService.skippedPassword;
+        setCardText(statusView, "采集状态", ToolsText.status(serviceStateText(), st));
 
         new Thread(() -> {
-            LogStore store = new LogStore(getFilesDir(), 0);
+            LogStore store = LogStore.get(getFilesDir());
             String today = DAY.format(new Date());
             Map<String, String> labels = store.labels(today);
             java.util.List<LogStore.Row> rows = store.readDay(today, 0);
             long bytes = store.totalBytes();
 
-            int total = 0;
-            int compCount = 0;
-            Map<String, Integer> counts = new LinkedHashMap<>();
-            Map<String, Integer> chars = new LinkedHashMap<>();
-            for (LogStore.Row r : rows) {
-                if (r.text.isEmpty()) {
-                    continue;
-                }
-                total++;
-                if (r.comp) {
-                    compCount++;
-                }
-                Integer c = counts.get(r.app);
-                counts.put(r.app, c == null ? 1 : c + 1);
-                Integer mx = chars.get(r.app);
-                chars.put(r.app, mx == null ? r.chars : Math.max(mx, r.chars));
-            }
-
-            StringBuilder st = new StringBuilder();
-            st.append("今天落盘版本数：").append(total).append("\n");
-            st.append("其中输入法未上屏：").append(compCount).append(" 条\n");
-            st.append("占用空间：")
-              .append(bytes < 1024 ? bytes + " 字节" : (bytes / 1024) + " KB").append("\n");
-            if (!rows.isEmpty()) {
-                LogStore.Row last = rows.get(rows.size() - 1);
-                st.append("最后一条（从磁盘读回）：\n")
-                  .append(last.ts.replace("T", " ").substring(0, 19)).append("\n")
-                  .append(tail(last.text, 120)).append("\n");
-            }
-            st.append("保存位置：应用私有目录（其他 App 读不到）");
-
-            StringBuilder ap = new StringBuilder();
-            if (counts.isEmpty()) {
-                ap.append("今天还没有记录。");
-            } else {
-                for (Map.Entry<String, Integer> e : counts.entrySet()) {
-                    ap.append("· ").append(name(labels, e.getKey()))
-                      .append("（").append(e.getKey()).append("）  ")
-                      .append(e.getValue()).append(" 条，最长 ")
-                      .append(chars.get(e.getKey())).append(" 字\n");
-                }
-            }
-
-            final String stFinal = st.toString();
-            final String apFinal = ap.toString().trim();
+            final String stFinal = ToolsText.statsText(rows, bytes);
+            final String apFinal = ToolsText.appsText(rows, labels);
             ui.post(() -> {
                 setCardText(statsView, "统计（今天）", stFinal);
                 setCardText(appsView, "今天记录过的 App", apFinal);
@@ -1439,10 +1393,6 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * 诊断正文。集中在这里生成，页面与弹窗共用 ——
-     * 分两处写就一定会走样（本项目已经因此丢过一次内容）。
-     */
-    /**
      * 诊断正文。**组装逻辑在 Diagnostics**（本类只负责把结果贴到界面上）。
      * 页面与弹窗共用同一份文本 —— 分两处写就一定会走样。
      */
@@ -1453,22 +1403,9 @@ public class MainActivity extends Activity {
                 lastStateProbe, serviceStateName());
     }
 
-    /** 设置项文案：页面与设置弹窗共用一份，避免两处不一致 */
+    /** 设置项文案（实现在 ToolsText，页面与设置弹窗共用一份） */
     private String[] settingItems() {
-        return new String[]{
-                "后台保活：" + (Prefs.keepAlive(this) ? "开启（通知栏常驻）" : "关闭"),
-                "只记录有焦点的输入框：" + (Prefs.focusOnly(this) ? "开启" : "关闭"),
-                "忽略删除操作：" + (Prefs.ignoreDeletions(this)
-                        ? "开启（删字不新建记录）" : "关闭（删除也记录）"),
-                "排除输入法键盘事件：" + (Prefs.skipIme(this) ? "开启" : "关闭"),
-                "最少记录字数（当前 " + Prefs.minChars(this) + " 字）",
-                "保留天数（当前 " + Prefs.retentionDays(this) + " 天）",
-                "轮询兜底：" + (Prefs.polling(this) ? "开启" : "关闭"),
-                "诊断日志：" + (Prefs.debug(this) ? "开启" : "关闭"),
-                "记录文本被清空：" + (Prefs.keepEmpty(this) ? "记录" : "不记录"),
-                "不记录的 App…",
-                "显示保存位置",
-        };
+        return ToolsText.settingItems(this);
     }
 
     /** 应用某一项设置（页面与设置弹窗共用） */

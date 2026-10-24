@@ -186,17 +186,13 @@ final class Diagnostics {
         return sb;
     }
 
-    /** 应用显示名：有标签用标签，没有就用包名 */
+    /** 应用显示名（实现在 TextUtil，保持纯函数不染 Android 依赖） */
     static String name(Map<String, String> labels, String app) {
-        String n = labels == null ? null : labels.get(app);
-        return (n == null || n.isEmpty()) ? app : n;
+        return TextUtil.name(labels, app);
     }
 
-    /** 取末尾 n 个字符（前面加省略号） */
+    /** 取末尾 n 个字符（实现在 TextUtil） */
     static String tail(String s, int n) {
-        if (s == null) {
-            return "";
-        }
-        return s.length() <= n ? s : "…" + s.substring(s.length() - n);
+        return TextUtil.tail(s, n);
     }
 }
