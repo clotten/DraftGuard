@@ -609,11 +609,14 @@ public class TypelogService extends AccessibilityService {
             if (!d.note.isEmpty()) {
                 diag(d.note);
             }
-            // 同一输入框只保留最后一次去抖。本次无论结果如何，旧定时器都要撤掉，
-            // 否则它会在事后把旧内容写进去 —— 那是最隐蔽的一类错序。
-            Runnable prev = debounce.remove(field);
-            if (prev != null) {
-                handler.removeCallbacks(prev);
+            // 要不要撤掉挂起的定时器，**由状态机决定**（d.cancelPending）。
+            // 千万别无条件撤：SKIP 时（比如"打几个字又立刻删掉"）
+            // 那几个字还挂在定时器上，撤掉就永远丢了 —— 实测过这个丢字。
+            if (d.cancelPending) {
+                Runnable prev = debounce.remove(field);
+                if (prev != null) {
+                    handler.removeCallbacks(prev);
+                }
             }
         }
         switch (d.kind) {
@@ -1134,6 +1137,11 @@ public class TypelogService extends AccessibilityService {
             written++;
             lastTs = r.ts;
             lastError = store.lastError == null ? "" : store.lastError;
+            // **每次真正落盘后都通知界面。**
+            // 漏掉这一句的后果（用户实测）：最后一个字要等去抖 350ms 才落盘，
+            // 而那之后不再有新事件，界面就一直停在"没有尾巴"的那一版 ——
+            // 表现得像"缺少最后几个字"，其实库里是全的，只是没刷新。
+            sendStats();
         } catch (Throwable t) {
             errors++;
             Log.w(TAG, "写入失败", t);

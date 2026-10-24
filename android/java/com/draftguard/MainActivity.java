@@ -157,7 +157,16 @@ public class MainActivity extends Activity {
             // 只刷新摘要与列表。列表内部会保留滚动位置，
             // 不再重写"滚动位置上方的卡片"（那会让界面看起来自己跳动）。
             long now = System.currentTimeMillis();
-            if (now - lastStatsRefresh > STATS_REFRESH_MS) {
+            if (now - lastStatsRefresh <= STATS_REFRESH_MS) {
+                // 节流窗口内**不能直接丢弃**：被吃掉的往往正是"最后一次落盘"的通知，
+                // 界面于是停在旧内容上，看起来就像"缺少最后几个字"（用户实测）。
+                // 改成尾随触发：窗口一满就补刷一次，最后一次必被看到。
+                ui.removeCallbacks(trailingRefresh);
+                ui.postDelayed(trailingRefresh,
+                        STATS_REFRESH_MS - (now - lastStatsRefresh) + 20);
+                return;
+            }
+            {
                 lastStatsRefresh = now;
                 refreshSummary();
                 refreshList();
@@ -178,6 +187,16 @@ public class MainActivity extends Activity {
     /** 统计卡片刷新节流间隔 */
     private static final long STATS_REFRESH_MS = 2000;
     private long lastStatsRefresh;
+
+    /** 节流窗口满时补刷一次，保证"最后一次落盘"一定被界面看到 */
+    private final Runnable trailingRefresh = new Runnable() {
+        @Override
+        public void run() {
+            lastStatsRefresh = System.currentTimeMillis();
+            refreshSummary();
+            refreshList();
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

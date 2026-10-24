@@ -165,6 +165,45 @@ public class CaptureStateTest {
         check("空前缀文本为 null 也不炸", CaptureState.addedChars(0, null, "x") == 1, null);
     }
 
+
+    /**
+     * 去抖定时器的生命周期契约 —— **这条是用户实测出来的丢字**。
+     *
+     * 实录：在搜索框打「…厉害的」，又打了「大肥鱼」，然后立刻全删。
+     * 结果记录里只有「…厉害的」，尾巴「大肥鱼」没了。
+     * 原因就是删除时把挂起的定时器一起撤掉了 → 尾巴永远不落盘。
+     */
+    private static void testTimerContract() {
+        System.out.println("11) 定时器契约：删除时不能撤掉挂起的落盘");
+
+        CaptureState st = new CaptureState();
+        CaptureState.Settings s = settings(true, 1);
+        st.onText("f1", "我最喜欢", false, "21:33", s);
+        CaptureState.Decision typed = st.onText("f1", "我最喜欢大肥鱼", false, "21:33", s);
+        check("正常输入 → 要撤旧定时器再重挂", typed.cancelPending, "cancelPending=false");
+
+        // 立刻开始删（模拟用户打完马上全删）
+        CaptureState.Decision del = st.onText("f1", "我最喜欢大肥", false, "21:33", s);
+        check("删除时不撤定时器（尾巴才不会丢）", !del.cancelPending, "cancelPending=true");
+        check("删除记为 SKIP/DELETE", del.kind == CaptureState.Kind.SKIP
+                && del.skip == CaptureState.Skip.DELETE, del.kind + "/" + del.skip);
+
+        // 逐个删到空：仍不撤
+        st.onText("f1", "我最喜", false, "21:33", s);
+        st.onText("f1", "我", false, "21:33", s);
+        CaptureState.Decision empty = st.onText("f1", "", false, "21:33", s);
+        check("逐个删除到空也不撤定时器", !empty.cancelPending, "cancelPending=true");
+        check("判为碎片（不抢救残渣）", empty.skip == CaptureState.Skip.FRAGMENT, empty.skip.name());
+
+        // 一次性清空（发送）：自己写，要撤
+        CaptureState st2 = new CaptureState();
+        st2.onText("f1", "我等着你回来", false, "21:33", s);
+        CaptureState.Decision clear = st2.onText("f1", "", false, "21:33", s);
+        check("一次性清空要撤定时器（改为自己抢救）", clear.cancelPending, "cancelPending=false");
+        check("清空抢救 → FLUSH_THEN_SKIP",
+                clear.kind == CaptureState.Kind.FLUSH_THEN_SKIP, clear.kind.name());
+    }
+
     public static void main(String[] args) {
         testNormalTyping();
         testClearAfterSend();
@@ -176,6 +215,7 @@ public class CaptureStateTest {
         testMinChars();
         testHugeText();
         testAddedChars();
+        testTimerContract();
 
         System.out.println();
         System.out.println("结果：通过 " + pass + " 项，失败 " + fail + " 项");

@@ -81,6 +81,15 @@ final class CaptureState {
         int delta;
         /** 诊断行（清空那一刻的判定依据，便于远程排查） */
         String note = "";
+        /**
+         * 是否要撤掉当前挂起的去抖定时器。
+         *
+         * <p><b>这是本类最容易踩坏的一条契约。</b>SKIP 时必须为 false ——
+         * 因为"打几个字又立刻删掉"时，那几个字还挂在定时器上，
+         * 一旦把定时器撤掉，尾巴就永远不会落盘（用户实测：打「…厉害的」后
+         * 又打了「大肥鱼」立刻删，记录里只有「…厉害的」）。
+         */ 
+        boolean cancelPending;
     }
 
     /** 每个输入框的状态 */
@@ -129,6 +138,7 @@ final class CaptureState {
         if (CaptureDecisions.isDeletionFragment(p.chars, p.lastNonEmptyText, text)) {
             d.kind = Kind.SKIP;
             d.skip = Skip.FRAGMENT;
+            d.cancelPending = false;      // 挂起的尾巴要照常落盘
             return d;
         }
         if (!text.isEmpty()) {
@@ -151,18 +161,21 @@ final class CaptureState {
         if (s.minChars > 1 && p.chars == 0 && text.trim().length() < 2) {
             d.kind = Kind.SKIP;
             d.skip = Skip.NOISE;
+            d.cancelPending = false;
             return d;
         }
         // ⑥ 输入框首条就是默认占位文字
         if (p.chars == 0 && PlainText.looksLikeEmptyFieldHint(text)) {
             d.kind = Kind.SKIP;
             d.skip = Skip.NOISE;
+            d.cancelPending = false;
             return d;
         }
         // ⑦ 超大文本：不去抖，直接写（免得内存里挂着几十兆）
         if (text.length() > s.cacheLimit) {
             updateState(p, text, comp, minute, shrunkNow);
             d.kind = Kind.COMMIT_NOW;
+            d.cancelPending = true;       // 马上自己写，旧定时器要撤
             d.text = text;
             d.comp = comp;
             d.delta = 0;
@@ -172,6 +185,7 @@ final class CaptureState {
         int delta = text.length() - p.chars;
         updateState(p, text, comp, minute, shrunkNow);
         d.kind = Kind.SCHEDULE;
+        d.cancelPending = true;           // 重新挂起，旧的撤掉
         d.text = text;
         d.comp = comp;
         d.delta = delta;
@@ -189,8 +203,10 @@ final class CaptureState {
             if (p.prevShrunk) {
                 d.kind = Kind.SKIP;
                 d.skip = Skip.FRAGMENT;
+                d.cancelPending = false;   // 逐个删除：让挂起的尾巴照常落盘
             } else {
                 d.kind = Kind.FLUSH_THEN_SKIP;
+                d.cancelPending = true;    // 一次性清空：自己写，撤掉定时器
                 d.flushText = p.text;
                 d.text = p.text;
                 d.comp = p.comp;
@@ -213,6 +229,7 @@ final class CaptureState {
         p.minute = minute;
         d.kind = Kind.SKIP;
         d.skip = Skip.DELETE;
+        d.cancelPending = false;          // 删除不打断挂起的落盘
         return d;
     }
 
