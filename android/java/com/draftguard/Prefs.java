@@ -65,6 +65,15 @@ final class Prefs {
     }
 
     /** 是否保留"文本被清空"的记录（默认保留，因为清空往往就是崩溃/误操作的现场） */
+    /** 迁移后的应用名是否已回填过（一次性） */
+    static boolean dbLabelsBackfilled(android.content.Context c) {
+        return sp(c).getBoolean("db_labels_backfilled", false);
+    }
+
+    static void setDbLabelsBackfilled(android.content.Context c) {
+        sp(c).edit().putBoolean("db_labels_backfilled", true).apply();
+    }
+
     static boolean keepEmpty(Context c) {
         return sp(c).getBoolean(K_KEEP_EMPTY, true);
     }

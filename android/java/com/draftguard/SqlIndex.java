@@ -285,6 +285,122 @@ final class SqlIndex {
         return out;
     }
 
+    /**
+     * 只读某个应用的记录（走 (app, ms) 索引）。
+     *
+     * 原来"应用详情"是遍历所有日期、把每一天的文件全读出来再按包名过滤 ——
+     * 看一个 QQ 的历史等于把全部 2 万行读一遍再扔掉 90%。
+     */
+    List<LogStore.Row> readApp(String app, long fromMs, int limit) {
+        List<LogStore.Row> out = new ArrayList<>();
+        Cursor c = null;
+        try {
+            StringBuilder sql = new StringBuilder(
+                    "SELECT ts, minute, app, field, text, comp, chars, ev"
+                            + " FROM rows WHERE app = ?");
+            List<String> args = new ArrayList<>();
+            args.add(app);
+            if (fromMs > 0) {
+                sql.append(" AND ms >= ").append(fromMs);
+            }
+            sql.append(" ORDER BY ms DESC");
+            if (limit > 0) {
+                sql.append(" LIMIT ").append(limit);
+            }
+            c = db.rawQuery(sql.toString(), args.toArray(new String[0]));
+            while (c.moveToNext()) {
+                LogStore.Row r = new LogStore.Row();
+                r.ts = str(c, 0);
+                r.minute = str(c, 1);
+                r.app = str(c, 2);
+                r.field = str(c, 3);
+                r.text = str(c, 4);
+                r.comp = c.getInt(5) != 0;
+                r.chars = c.getInt(6);
+                r.ev = str(c, 7).isEmpty() ? "text" : str(c, 7);
+                out.add(r);
+            }
+        } catch (Throwable e) {
+            lastError = String.valueOf(e);
+            Log.w(TAG, "readApp 失败", e);
+        } finally {
+            closeQuietly(c);
+        }
+        java.util.Collections.reverse(out);
+        return out;
+    }
+
+    /**
+     * 补齐 app_label。
+     *
+     * 为什么要它：迁移时是从 JSONL 的 Row 反推的，而 Row 里没有应用显示名，
+     * 于是所有迁移过来的行 app_label 都是空的 —— 界面就退回显示包名。
+     * 这里用当天的 index.json 补一次（只更新空值的行）。
+     *
+     * @return 更新了多少行
+     */
+    int fillLabel(String day, String app, String label) {
+        if (label == null || label.isEmpty()) {
+            return 0;
+        }
+        try {
+            ContentValues v = new ContentValues(1);
+            v.put("app_label", label);
+            return db.update("rows", v,
+                    "day = ? AND app = ? AND (app_label IS NULL OR app_label = '')",
+                    new String[]{day, app});
+        } catch (Throwable e) {
+            lastError = String.valueOf(e);
+            return 0;
+        }
+    }
+
+    /** 某个应用有记录的日期（新 → 旧） */
+    List<String> appDays(String app) {
+        List<String> out = new ArrayList<>();
+        Cursor c = null;
+        try {
+            c = db.rawQuery("SELECT day FROM rows WHERE app = ?"
+                    + " GROUP BY day ORDER BY day DESC", new String[]{app});
+            while (c.moveToNext()) {
+                out.add(str(c, 0));
+            }
+        } catch (Throwable e) {
+            lastError = String.valueOf(e);
+        } finally {
+            closeQuietly(c);
+        }
+        return out;
+    }
+
+    /** 某个应用在某一天的记录（正序），供"按天翻页"使用 */
+    List<LogStore.Row> readAppDay(String app, String day) {
+        List<LogStore.Row> out = new ArrayList<>();
+        Cursor c = null;
+        try {
+            c = db.rawQuery("SELECT ts, minute, app, field, text, comp, chars, ev"
+                    + " FROM rows WHERE app = ? AND day = ? ORDER BY ms ASC",
+                    new String[]{app, day});
+            while (c.moveToNext()) {
+                LogStore.Row r = new LogStore.Row();
+                r.ts = str(c, 0);
+                r.minute = str(c, 1);
+                r.app = str(c, 2);
+                r.field = str(c, 3);
+                r.text = str(c, 4);
+                r.comp = c.getInt(5) != 0;
+                r.chars = c.getInt(6);
+                r.ev = str(c, 7).isEmpty() ? "text" : str(c, 7);
+                out.add(r);
+            }
+        } catch (Throwable e) {
+            lastError = String.valueOf(e);
+        } finally {
+            closeQuietly(c);
+        }
+        return out;
+    }
+
     /** 有记录的日期，新 → 旧 */
     List<String> days() {
         List<String> out = new ArrayList<>();
@@ -321,7 +437,7 @@ final class SqlIndex {
             }
             c = db.rawQuery("SELECT app, MAX(app_label), COUNT(*),"
                     + " SUM(LENGTH(text)), MAX(ts), COUNT(DISTINCT day), MAX(ms)"
-                    + " FROM rows" + where + "GROUP BY app ORDER BY MAX(ms) DESC", null);
+                    + " FROM rows " + where + " GROUP BY app ORDER BY MAX(ms) DESC", null);
             while (c.moveToNext()) {
                 LogStore.AppStat a = new LogStore.AppStat();
                 a.app = str(c, 0);

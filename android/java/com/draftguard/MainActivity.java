@@ -129,6 +129,12 @@ public class MainActivity extends Activity {
      */
     private static final int SEGMENT_ROW_CAP = 6000;
 
+    /** 应用详情页最多读多少行（超出后提示"只显示最新 N 个"） */
+    private static final int APP_DETAIL_ROW_CAP = 6000;
+
+    /** 列表分页：每点一次"加载更早"多一页（每页 SEGMENT_ROW_CAP 行） */
+    private int pagesLoaded = 1;
+
     /** 按天缓存的解析结果：day -> {签名, List<Row>}；签名由该日各 jsonl 的长度+修改时间算出 */
     private static final java.util.Map<String, Object[]> dayCache = new java.util.HashMap<>();
 
@@ -503,7 +509,7 @@ public class MainActivity extends Activity {
         rlp.bottomMargin = dp(8);
         row.setLayoutParams(rlp);
         row.setClickable(true);
-        row.setOnClickListener(v -> showAppDetail(st));
+        row.setOnClickListener(v -> showAppDetailPaged(st));
 
         ImageView icon = new ImageView(this);
         int sz = dp(42);
@@ -621,6 +627,156 @@ public class MainActivity extends Activity {
         }, "typelog-icons").start();
     }
 
+    // ══════════════════════════════════════════════ 应用详情（按天分页）
+
+    /**
+     * 应用详情：**按天翻页**，一次只渲染一天。
+     *
+     * 为什么改：原来是把这个应用的全部历史拼成一个巨大的 Spannable 一次性塞进
+     * TextView —— 数据攒多之后既慢又吃内存（用户反馈"单个应用数据加载的很慢"）。
+     * 改成一次一天：每次只查一天的量，快且确定。
+     */
+    private void showAppDetailPaged(final LogStore.AppStat st) {
+        detailApp = st.app;
+        appsRoot.removeAllViews();
+
+        // 顶部：返回 + 标题
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        bar.setPadding(0, 0, 0, dp(10));
+
+        Button back = button("← 返回");
+        back.setOnClickListener(v -> refreshAppsPage());
+        bar.addView(back);
+
+        LinearLayout titleCol = new LinearLayout(this);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tlp.leftMargin = dp(12);
+        titleCol.setLayoutParams(tlp);
+
+        TextView name = new TextView(this);
+        name.setTextColor(Color.parseColor("#E8ECF3"));
+        name.setTextSize(17);
+        name.setTypeface(null, Typeface.BOLD);
+        name.setText(st.display());
+        titleCol.addView(name);
+
+        TextView sub = new TextView(this);
+        sub.setTextColor(Color.parseColor("#8B95A7"));
+        sub.setTextSize(11);
+        sub.setPadding(0, dp(2), 0, 0);
+        sub.setText(st.rows + " 条　" + st.app);
+        titleCol.addView(sub);
+        bar.addView(titleCol);
+        appsRoot.addView(bar);
+
+        // 天导航：更早 / 日期 / 更晚
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        nav.setPadding(0, 0, 0, dp(8));
+
+        final Button older = button("← 更早");
+        final Button newer = button("更晚 →");
+        final TextView dayLabel = new TextView(this);
+        dayLabel.setTextColor(Color.parseColor("#5B9DFF"));
+        dayLabel.setTextSize(13);
+        dayLabel.setGravity(android.view.Gravity.CENTER);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        dayLabel.setLayoutParams(dlp);
+        nav.addView(older);
+        nav.addView(dayLabel);
+        nav.addView(newer);
+        appsRoot.addView(nav);
+
+        final TextView body = new TextView(this);
+        body.setTextColor(Color.parseColor("#E8ECF3"));
+        body.setTextSize(13);
+        body.setPadding(dp(12), dp(10), dp(12), dp(10));
+        body.setBackgroundColor(Color.parseColor("#1A1D26"));
+        body.setTextIsSelectable(true);
+        body.setText("读取中…");
+        appsRoot.addView(body);
+
+        final java.util.List<String> days = new java.util.ArrayList<>();
+        final int[] idx = {0};
+
+        final Runnable render = new Runnable() {
+            @Override
+            public void run() {
+                if (days.isEmpty()) {
+                    dayLabel.setText("没有记录");
+                    body.setText("这个应用还没有可显示的内容。");
+                    older.setEnabled(false);
+                    newer.setEnabled(false);
+                    return;
+                }
+                final String day = days.get(idx[0]);
+                final int i = idx[0];
+                final int total = days.size();
+                dayLabel.setText(day + "　" + (i + 1) + " / " + total + " 天");
+                older.setEnabled(i < total - 1);
+                newer.setEnabled(i > 0);
+                body.setText("读取中…");
+                new Thread(() -> {
+                    LogStore store = new LogStore(getFilesDir(), 0);
+                    java.util.List<LogStore.Row> mine = store.readAppDay(st.app, day);
+                    java.util.List<Burst> bursts = Burst.groupNewestFirst(mine);
+                    final android.text.SpannableStringBuilder sb =
+                            new android.text.SpannableStringBuilder();
+                    span(sb, "共 " + bursts.size() + " 段　原始 " + mine.size() + " 个版本\n",
+                            Color.parseColor("#8B95A7"), 0.9f, false);
+                    span(sb, "同一次连续输入只显示最后成型的整段。\n", Color.parseColor("#8B95A7"),
+                            0.9f, false);
+                    for (Burst b : bursts) {
+                        sb.append("\n");
+                        StringBuilder h = new StringBuilder();
+                        h.append(b.firstTs, 11, 16);
+                        if (!b.firstTs.substring(11, 16).equals(b.lastTs.substring(11, 16))) {
+                            h.append("–").append(b.lastTs, 11, 16);
+                        }
+                        h.append("　").append(b.text.length()).append(" 字");
+                        if (b.versions > 1) {
+                            h.append("　合并 ").append(b.versions).append(" 版");
+                        }
+                        span(sb, h.toString() + "\n", Color.parseColor("#5B9DFF"), 0.85f, false);
+                        span(sb, b.text + "\n", Color.parseColor("#E8ECF3"), 1.0f, false);
+                    }
+                    ui.post(() -> body.setText(sb));
+                }, "typelog-appday").start();
+            }
+        };
+
+        older.setOnClickListener(v -> {
+            if (idx[0] < days.size() - 1) {
+                idx[0]++;
+                render.run();
+            }
+        });
+        newer.setOnClickListener(v -> {
+            if (idx[0] > 0) {
+                idx[0]--;
+                render.run();
+            }
+        });
+
+        // 先拿"这个应用有哪些天"，再渲染最新的一天
+        new Thread(() -> {
+            LogStore store = new LogStore(getFilesDir(), 0);
+            java.util.List<String> ds = store.appDays(st.app);
+            ui.post(() -> {
+                days.clear();
+                days.addAll(ds);
+                idx[0] = 0;
+                render.run();
+            });
+        }, "typelog-appdays").start();
+    }
+
     // ══════════════════════════════════════════════ 应用详情（第二页内）
 
     /** 显示某个应用的全部记录，按天分组，带返回按钮 */
@@ -672,21 +828,31 @@ public class MainActivity extends Activity {
 
         new Thread(() -> {
             LogStore store = new LogStore(getFilesDir(), 0);
-            java.util.List<String> days = store.days();
+            // 只读这个应用自己的记录（走 (app, ms) 索引）。
+            // 原来是"把所有日期的文件全读出来，再按包名过滤"——
+            // 看一个 QQ 的历史等于把全部两万行读一遍再扔掉九成。
+            java.util.List<LogStore.Row> allMine = store.readApp(st.app, 0, APP_DETAIL_ROW_CAP);
+            final boolean truncated = allMine.size() >= APP_DETAIL_ROW_CAP;
+            java.util.LinkedHashMap<String, java.util.List<LogStore.Row>> byDay =
+                    new java.util.LinkedHashMap<>();
+            for (LogStore.Row r : allMine) {
+                String d = r.ts.length() >= 10 ? r.ts.substring(0, 10) : "";
+                java.util.List<LogStore.Row> lst = byDay.get(d);
+                if (lst == null) {
+                    lst = new java.util.ArrayList<>();
+                    byDay.put(d, lst);
+                }
+                lst.add(r);
+            }
+            java.util.List<String> days = new java.util.ArrayList<>(byDay.keySet());
+            java.util.Collections.reverse(days);      // 天从新到旧
             final android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
             int totalRows = 0;
             int totalSeg = 0;
             boolean firstDay = true;
-            // 天从新到旧（days() 已倒序）
             for (String day : days) {
-                java.util.List<LogStore.Row> rows = store.readDay(day, 0);
-                java.util.List<LogStore.Row> mine = new java.util.ArrayList<>();
-                for (LogStore.Row r : rows) {
-                    if (st.app.equals(r.app)) {
-                        mine.add(r);
-                    }
-                }
-                if (mine.isEmpty()) {
+                java.util.List<LogStore.Row> mine = byDay.get(day);
+                if (mine == null || mine.isEmpty()) {
                     continue;
                 }
                 totalRows += mine.size();
@@ -720,7 +886,8 @@ public class MainActivity extends Activity {
                     body.setText("这个应用还没有可显示的内容。");
                 } else {
                     android.text.SpannableStringBuilder head = new android.text.SpannableStringBuilder();
-                    span(head, "共 " + fSeg + " 段　原始 " + fRows + " 个版本（全部时间）\n",
+                    span(head, "共 " + fSeg + " 段　原始 " + fRows + " 个版本"
+                            + (truncated ? "（只显示最新 " + fRows + " 个）" : "") + "\n",
                             Color.parseColor("#8B95A7"), 0.9f, false);
                     span(head, "同一次连续输入只显示最后成型的整段。\n\n",
                             Color.parseColor("#8B95A7"), 0.9f, false);
@@ -851,7 +1018,7 @@ public class MainActivity extends Activity {
                 // 索引可用：直接把"只要最新 N 行"交给 SQL ——
                 // 不读全部日期，也不把 2 万行搬进 Java 再砍掉
                 daysTotal = store.days().size();
-                rows.addAll(store.readNewest(from, SEGMENT_ROW_CAP));
+                rows.addAll(store.readNewest(from, SEGMENT_ROW_CAP * pagesLoaded));
             }
             for (String day : (store.hasIndex()
                     ? java.util.Collections.<String>emptyList() : store.days())) {
@@ -882,10 +1049,11 @@ public class MainActivity extends Activity {
             lastListRows = rows.size();
             // 只把最新的 SEGMENT_ROW_CAP 行交给分段器：界面最多 400 段，
             // 把 2 万行全分段只是白算。保留连续窗口，窗口内边界不动。
-            if (rows.size() > SEGMENT_ROW_CAP) {
+            final int rowCap = SEGMENT_ROW_CAP * pagesLoaded;
+            if (rows.size() > rowCap) {
                 rows = new java.util.ArrayList<>(
-                        rows.subList(rows.size() - SEGMENT_ROW_CAP, rows.size()));
-                lastListSegmented = SEGMENT_ROW_CAP;
+                        rows.subList(rows.size() - rowCap, rows.size()));
+                lastListSegmented = rowCap;
             } else {
                 lastListSegmented = rows.size();
             }
@@ -896,6 +1064,8 @@ public class MainActivity extends Activity {
             // 文本形态去猜 —— 实测后果："好 / 好不好 / 你不好 / 你不会" 四条独立消息
             // 被合并成一条（界面显示「合并 4 版」）。
             // 它们不会出现在结果里：Burst.groupNewestFirst 已负责过滤空段。
+            // 每页最多显示 400 段；"加载更早"每点一次多一页
+            final int segCap = 400 * pagesLoaded;
             java.util.List<LogStore.Row> kept = new java.util.ArrayList<>();
             for (LogStore.Row r : rows) {
                 final boolean boundary = "send".equals(r.ev) || r.text.isEmpty();
@@ -913,7 +1083,7 @@ public class MainActivity extends Activity {
 
             final java.util.List<Object> out = new java.util.ArrayList<>();
             if (showRawRows) {
-                for (int i = kept.size() - 1; i >= 0 && out.size() < 400; i--) {
+                for (int i = kept.size() - 1; i >= 0 && out.size() < segCap; i--) {
                     LogStore.Row rr = kept.get(i);
                     if (rr.text.isEmpty()) {
                         continue;      // 逐条视图只显示有正文的版本
@@ -922,7 +1092,7 @@ public class MainActivity extends Activity {
                 }
             } else {
                 java.util.List<Burst> bursts = Burst.groupNewestFirst(kept);
-                for (int i = 0; i < bursts.size() && out.size() < 400; i++) {
+                for (int i = 0; i < bursts.size() && out.size() < segCap; i++) {
                     out.add(bursts.get(i));
                 }
             }
@@ -947,6 +1117,7 @@ public class MainActivity extends Activity {
 
 
 /** 长按一条记录 → 确认后单点删除（隐私数据） */
+
     private void confirmDelete(final Object item) {
         final String app;
         final String field;
@@ -1320,9 +1491,10 @@ public class MainActivity extends Activity {
 
     /** 时间范围选择：实测半天就有 918 段，全铺出来没法看，所以给了范围开关 */
     private void chooseRange() {
-        final int[] opts = {1440, 360, 60, 0};
-        String[] labels = {"最近 24 小时（默认）", "最近 6 小时", "最近 1 小时",
-                "全部时间（数据多时会慢）"};
+        // 没有「全部时间」了：数据攒多之后它要么很慢、要么只是个"看起来全"的假象。
+        // 要翻更早的记录，去「应用」页按天翻 —— 那里一天一页，快且明确。
+        final int[] opts = {1440, 360, 60};
+        String[] labels = {"最近 24 小时", "最近 6 小时", "最近 1 小时"};
         new android.app.AlertDialog.Builder(this)
                 .setTitle("记录的时间范围")
                 .setItems(labels, (d, which) -> {

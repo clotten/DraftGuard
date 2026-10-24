@@ -329,6 +329,84 @@ final class LogStore {
         return all;
     }
 
+    /** 只读某个应用的记录（正序）。索引可用时走索引，否则退回全扫 + 过滤。 */
+    List<Row> readApp(String app, long fromMs, int limit) {
+        if (idx != null) {
+            List<Row> fast = idx.readApp(app, fromMs, limit);
+            if (!fast.isEmpty()) {
+                return fast;
+            }
+        }
+        List<Row> all = new ArrayList<>();
+        for (String day : days()) {
+            for (Row r : readDay(day, 0)) {
+                if (app.equals(r.app)) {
+                    all.add(r);
+                }
+            }
+        }
+        if (limit > 0 && all.size() > limit) {
+            return new ArrayList<>(all.subList(all.size() - limit, all.size()));
+        }
+        return all;
+    }
+
+    /**
+     * 迁移后补齐应用显示名（只补空值，不会覆盖已有的）。
+     * @return 一共更新了多少行
+     */
+    synchronized int backfillLabels() {
+        if (idx == null) {
+            return 0;
+        }
+        int n = 0;
+        for (String day : idx.days()) {
+            Map<String, String> lab = labels(day);
+            for (Map.Entry<String, String> e : lab.entrySet()) {
+                n += idx.fillLabel(day, e.getKey(), e.getValue());
+            }
+        }
+        indexImported = n > 0 ? indexImported : indexImported;
+        return n;
+    }
+
+    /** 某个应用有记录的日期（新 → 旧） */
+    List<String> appDays(String app) {
+        if (idx != null) {
+            List<String> fast = idx.appDays(app);
+            if (!fast.isEmpty()) {
+                return fast;
+            }
+        }
+        java.util.LinkedHashMap<String, Boolean> seen = new java.util.LinkedHashMap<>();
+        for (String day : days()) {
+            for (Row r : readDay(day, 0)) {
+                if (app.equals(r.app)) {
+                    seen.put(day, Boolean.TRUE);
+                    break;
+                }
+            }
+        }
+        return new ArrayList<>(seen.keySet());
+    }
+
+    /** 某个应用在某一天的记录（正序） */
+    List<Row> readAppDay(String app, String day) {
+        if (idx != null) {
+            List<Row> fast = idx.readAppDay(app, day);
+            if (!fast.isEmpty()) {
+                return fast;
+            }
+        }
+        List<Row> out = new ArrayList<>();
+        for (Row r : readDay(day, 0)) {
+            if (app.equals(r.app)) {
+                out.add(r);
+            }
+        }
+        return out;
+    }
+
     List<String> days() {
         if (idx != null) {
             List<String> fast = idx.days();

@@ -183,6 +183,14 @@ public class TypelogService extends AccessibilityService {
         handler.post(() -> {
             try {
                 store.rebuildIndexIfEmpty();
+                // 迁移过来的行没有应用显示名，补一次（之后由 append 正常写入）
+                if (!Prefs.dbLabelsBackfilled(this)) {
+                    int fixed = store.backfillLabels();
+                    Prefs.setDbLabelsBackfilled(this);
+                    if (fixed > 0) {
+                        Log.i(TAG, "补齐应用显示名：" + fixed + " 行");
+                    }
+                }
             } catch (Throwable t) {
                 Log.w(TAG, "重建索引失败（不影响记录，读会回退到文件）", t);
             }
