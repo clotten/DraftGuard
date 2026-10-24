@@ -27,10 +27,43 @@
 - **CI 与离线测试无法再覆盖存储层**（现有 `test/StoreTest.java` 的 22 项断言测的是文件读写，会全部失效）
 - 这不是"可以忽略"的成本：本项目最有价值的工程习惯就是"84 项断言跑在普通 JVM 上"
 
-**对策**：
-1. 把 `StoreTest` 换成 `JsonTest` —— 覆盖**序列化层**（`Json.line` 的转义、`LogStore.unescape`、`Record` 字段完整性），这部分是纯字符串逻辑，仍然可离线测
-2. 新增探针命令 `verify`，在真机上做**完整性校验**（见第五节），把"存储层验证"从单元测试挪到设备端
-3. 在 CI 里保留 `BurstTest`（62 项，纯逻辑）
+**对策（已实测可行，见下方"补充：CI 其实能测数据库"）**：
+1. 把 `StoreTest` 换成 `SqlTest` —— 用 **sqlite-jdbc** 在普通 JVM 上跑**同一份 SQL**（建表、读一天、
+   按应用统计、搜索、删除、以及"SQL 拼串"这类断言），保留离线可测性
+2. 保留 `JsonTest`（序列化层的转义/反转义）
+3. 新增探针命令 `verify`，在真机上做**完整性校验**（见第五节），补上"驱动层差异"抓不到的那部分
+4. 在 CI 里保留 `BurstTest`（62 项，纯逻辑）
+
+### 补充：CI 其实能测数据库（2026-10 实测）
+
+我一开始断言"CI 无法覆盖存储层"是**错的**。实测结论：
+
+| 方案 | 依赖 | CI 耗时 | 说明 |
+|---|---|---|---|
+| **sqlite-jdbc（推荐）** | `sqlite-jdbc` + `slf4j-api` + `slf4j-nop`（13MB + 67KB + 5KB） | 几秒 | 同一个 SQLite 引擎，纯 `javac`/`java`，不需要 Gradle |
+| Robolectric | 约 100MB 传递依赖 | 30s+ | Android 框架级，类路径繁琐 |
+| CI 跑模拟器 | 无 | 5–15 分钟 | 最真实，但慢 |
+| 不测 + 只上真机 verify | 无 | 0 | 没有 CI 覆盖 |
+
+实测脚本（已在普通 JVM 上跑通，9 项断言全过）验证了：
+
+```
+建表 + 4 个索引        OK
+插入（中文/换行/引号）  OK
+读某一天               OK
+按应用统计             OK
+搜索（含换行引号）      OK
+"SQL 少一个空格" → 报错 OK   ← 今天那个 bug 会被测试抓住
+删除单条               OK
+```
+
+> **代价**：生产用 `android.database.sqlite`，测试用 JDBC —— 引擎相同、**驱动层不同**。
+> 所以 `ContentValues` 用法、`Cursor` 边界这类"驱动特有"的问题测不到，
+> 仍需真机 `verify` 兜底。
+
+**对代码结构的要求**：把所有 SQL 字符串集中成常量（`SqlIndex` 里的 `static final String`），
+测试直接引用同一份常量，避免"测试里的 SQL 和生产里的 SQL 不是同一句"。
+
 
 ### 约束 2：导出格式不能变
 
@@ -89,18 +122,30 @@ static int writeZipFromStore(LogStore store, OutputStream os)
 - `store.root()` 仅剩日志用途，保留
 - 迁移完成后**删除旧的 JSONL 日期目录**（断舍离的本体）
 
-### 5. `test/StoreTest.java` → `test/JsonTest.java`
+### 5. 测试：`StoreTest` → `SqlTest` + `JsonTest`
 
-保留可离线验证的部分：
+**`test/SqlTest.java`（新，用 sqlite-jdbc 跑真 SQLite）**
+
+| 断言 | 内容 |
+|---|---|
+| 建表 | schema + 4 个索引都能建 |
+| 写入/读回 | 中文、换行、引号、表情往返一致 |
+| 读某一天 | `readDay` 的 SQL 正确 |
+| 按应用统计 | `appsSummary` 的 GROUP BY / COUNT 正确 |
+| 搜索 | LIKE 命中；`%` `_` 通配符不误伤 |
+| 删除 | `deleteRange` 只删匹配行 |
+| SQL 拼串 | `where` 为空/非空两种情况下 SQL 都合法（**今天那个空格的 bug**） |
+
+**`test/JsonTest.java`（改造自 StoreTest，纯字符串）**
 
 | 断言 | 内容 |
 |---|---|
 | `Json.line` | 换行 / 引号 / 反斜杠 / 表情 / 制表符 的转义 |
 | `LogStore.unescape` | 与上面互逆 |
 | `Record` 默认值 | `ev`、`comp`、`delta` 的默认状态 |
-| 行长度 | 一条记录序列化后不超过合理长度 |
 
-目标：**12–15 项**，仍然跑在普通 JVM 上。
+CI 加载三个 jar 的方式：`tools/fetch-test-jars.ps1`（提交脚本，不提交 jar），
+下载到 `build/jars/`；`build/` 已在 `.gitignore` 里。
 
 ### 6. CI（`.github/workflows/test.yml`）
 
