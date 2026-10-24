@@ -45,20 +45,20 @@ public class SqlTest {
     public static void main(String[] args) throws Exception {
         Class.forName("org.sqlite.JDBC");
         File tmp = Files.createTempDirectory("draftguard-sql").toFile();
-        String dbPath = new File(tmp, LogStore.DB_NAME).getAbsolutePath();
+        String dbPath = new File(tmp, SqlSchema.DB_NAME).getAbsolutePath();
         Connection c = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
         Statement s = c.createStatement();
 
         System.out.println("1) 建表与索引（用生产代码里的同一批常量）");
-        s.execute(LogStore.SQL_CREATE_ROWS);
-        for (String sql : LogStore.SQL_CREATE_INDEXES) {
+        s.execute(SqlSchema.CREATE_ROWS);
+        for (String sql : SqlSchema.CREATE_INDEXES) {
             s.execute(sql);
         }
-        check("建表 + " + LogStore.SQL_CREATE_INDEXES.length + " 个索引", true, null);
+        check("建表 + " + SqlSchema.CREATE_INDEXES.length + " 个索引", true, null);
 
         // 幂等：再执行一次不应报错（升级场景会重复执行）
-        s.execute(LogStore.SQL_CREATE_ROWS);
-        for (String sql : LogStore.SQL_CREATE_INDEXES) {
+        s.execute(SqlSchema.CREATE_ROWS);
+        for (String sql : SqlSchema.CREATE_INDEXES) {
             s.execute(sql);
         }
         check("重复建表不报错（幂等）", true, null);
@@ -75,13 +75,13 @@ public class SqlTest {
         check("插入 4 条", count(s, "SELECT COUNT(*) FROM rows") == 4, null);
 
         System.out.println("3) 读某一天（SQL_READ_DAY）");
-        check("2026-10-24 有 3 条", count(s, LogStore.SQL_READ_DAY.replace("?", "'2026-10-24'")
+        check("2026-10-24 有 3 条", count(s, SqlSchema.READ_DAY.replace("?", "'2026-10-24'")
                 .replace("SELECT ts, minute, app, field, text, comp, chars, ev",
                         "SELECT COUNT(*)")) == 3, null);
 
         System.out.println("4) 按应用统计（SQL_APPS_SUMMARY，空 where 会暴露少空格的 bug）");
         try {
-            ResultSet rs = s.executeQuery(String.format(LogStore.SQL_APPS_SUMMARY, ""));
+            ResultSet rs = s.executeQuery(String.format(SqlSchema.APPS_SUMMARY, ""));
             int apps = 0;
             String firstLabel = null;
             int firstCount = 0;
@@ -103,7 +103,7 @@ public class SqlTest {
 
         System.out.println("5) 按应用统计（带 where）");
         try {
-            ResultSet rs = s.executeQuery(String.format(LogStore.SQL_APPS_SUMMARY,
+            ResultSet rs = s.executeQuery(String.format(SqlSchema.APPS_SUMMARY,
                     " WHERE day IN ('2026-10-23') "));
             rs.next();
             check("只统计 10-23 时第一个是 微信",
@@ -115,7 +115,7 @@ public class SqlTest {
 
         System.out.println("6) 读某个应用某一天（SQL_READ_APP_DAY）");
         {
-            java.sql.PreparedStatement ps = c.prepareStatement(LogStore.SQL_READ_APP_DAY);
+            java.sql.PreparedStatement ps = c.prepareStatement(SqlSchema.READ_APP_DAY);
             ps.setString(1, "com.tencent.mobileqq");
             ps.setString(2, "2026-10-24");
             ResultSet r2 = ps.executeQuery();
@@ -129,7 +129,7 @@ public class SqlTest {
         }
 
         System.out.println("7) 该应用有哪些天（SQL_APP_DAYS）");
-        ResultSet rs = s.executeQuery(LogStore.SQL_APP_DAYS.replace("?", "'com.tencent.mobileqq'"));
+        ResultSet rs = s.executeQuery(SqlSchema.APP_DAYS.replace("?", "'com.tencent.mobileqq'"));
         int days = 0;
         while (rs.next()) {
             days++;
@@ -138,7 +138,7 @@ public class SqlTest {
         check("QQ 分布在 1 天", days == 1, "实际 " + days);
 
         System.out.println("8) 搜索（SQL_SEARCH，含换行/引号的内容也能命中）");
-        rs = s.executeQuery(String.format(LogStore.SQL_SEARCH, "")
+        rs = s.executeQuery(String.format(SqlSchema.SEARCH, "")
                 .replaceFirst("\\?", "'%引号%'").replaceFirst("\\?", "10"));
         int hits = 0;
         while (rs.next()) {
@@ -148,7 +148,7 @@ public class SqlTest {
         check("搜索命中 1 条", hits == 1, "实际 " + hits);
 
         System.out.println("9) 最新 N 条（SQL_READ_NEWEST）");
-        rs = s.executeQuery(String.format(LogStore.SQL_READ_NEWEST, "")
+        rs = s.executeQuery(String.format(SqlSchema.READ_NEWEST, "")
                 .replaceFirst("\\?", "2"));
         int newest = 0;
         while (rs.next()) {
@@ -160,10 +160,10 @@ public class SqlTest {
         System.out.println("10) 删除（同 deleteRange 用的条件）");
         s.executeUpdate("DELETE FROM rows WHERE app = 'com.tencent.mm'"
                 + " AND ts >= '2026-10-23T10:00:00.000' AND ts <= '2026-10-23T10:00:00.000'");
-        check("删完剩 3 条", count(s, LogStore.SQL_COUNT) == 3, null);
+        check("删完剩 3 条", count(s, SqlSchema.COUNT) == 3, null);
 
         System.out.println("11) 标签查询（SQL_APP_LABELS）");
-        rs = s.executeQuery(LogStore.SQL_APP_LABELS.replace("?", "'2026-10-24'"));
+        rs = s.executeQuery(SqlSchema.APP_LABELS.replace("?", "'2026-10-24'"));
         String lab = null;
         while (rs.next()) {
             lab = rs.getString(2);
@@ -199,7 +199,7 @@ public class SqlTest {
     private static void insert(Statement s, String ts, long ms, String day, String minute,
                                String app, String label, String field, String ev,
                                String text) throws Exception {
-        java.sql.PreparedStatement ps = s.getConnection().prepareStatement(LogStore.SQL_INSERT);
+        java.sql.PreparedStatement ps = s.getConnection().prepareStatement(SqlSchema.INSERT);
         ps.setString(1, ts);
         ps.setLong(2, ms);
         ps.setString(3, day);

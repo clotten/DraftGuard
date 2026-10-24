@@ -37,71 +37,9 @@ import java.util.zip.ZipOutputStream;
 final class LogStore {
 
     private static final String TAG = "LogStore";
-    static final String DB_NAME = "draftguard.db";
+    static final String DB_NAME = SqlSchema.DB_NAME;
 
-    // ════════════════════════════════════════════ SQL（测试引用同一份）
-
-    static final String SQL_CREATE_ROWS =
-            "CREATE TABLE IF NOT EXISTS rows ("
-                    + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                    + "ts TEXT, ms INTEGER NOT NULL, day TEXT, minute TEXT,"
-                    + "app TEXT NOT NULL, app_label TEXT, field TEXT, ev TEXT,"
-                    + "chars INTEGER, delta INTEGER, comp INTEGER,"
-                    + "text TEXT, detail TEXT)";
-
-    static final String SQL_INSERT =
-            "INSERT INTO rows(ts,ms,day,minute,app,app_label,field,ev,"
-                    + "chars,delta,comp,text,detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)";
-
-    static final String[] SQL_CREATE_INDEXES = {
-            "CREATE INDEX IF NOT EXISTS idx_ms  ON rows(ms DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_day ON rows(day, app)",
-            "CREATE INDEX IF NOT EXISTS idx_app ON rows(app, ms DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_fld ON rows(field, ms)",
-    };
-
-    private static final String COLS = "ts, minute, app, field, text, comp, chars, ev";
-
-    static final String SQL_READ_DAY =
-            "SELECT " + COLS + " FROM rows WHERE day = ? ORDER BY ms ASC";
-
-    static final String SQL_DAYS = "SELECT DISTINCT day FROM rows ORDER BY day DESC";
-
-    /** %s 放可选的时间下界（空串 或 " AND ms >= 123"） */
-    static final String SQL_READ_NEWEST =
-            "SELECT " + COLS + " FROM rows WHERE 1=1%s ORDER BY ms DESC LIMIT ?";
-
-    /** %s 放可选的时间下界 */
-    static final String SQL_READ_APP =
-            "SELECT " + COLS + " FROM rows WHERE app = ?%s ORDER BY ms DESC LIMIT ?";
-
-    static final String SQL_APP_DAYS =
-            "SELECT day FROM rows WHERE app = ? GROUP BY day ORDER BY day DESC";
-
-    static final String SQL_READ_APP_DAY =
-            "SELECT " + COLS + " FROM rows WHERE app = ? AND day = ? ORDER BY ms ASC";
-
-    /**
-     * %s 放可选的 " WHERE day IN (...)"。
-     * <b>FROM rows 后面和 GROUP BY 前面都必须有空格</b> —— v2.39.0 少了一个，
-     * 空 where 时拼成 {@code rowsGROUP BY}，语法错误被 catch 吞掉，静默回退慢路径。
-     */
-    static final String SQL_APPS_SUMMARY =
-            "SELECT app, MAX(app_label), COUNT(*), SUM(LENGTH(text)), MAX(ts),"
-                    + " COUNT(DISTINCT day), MAX(ms) FROM rows %s GROUP BY app ORDER BY MAX(ms) DESC";
-
-    /** %s 放可选的 " AND day = ?" */
-    static final String SQL_SEARCH =
-            "SELECT " + COLS + " FROM rows WHERE text LIKE ?%s ORDER BY ms DESC LIMIT ?";
-
-    static final String SQL_APP_LABELS =
-            "SELECT app, MAX(app_label) FROM rows WHERE day = ? GROUP BY app";
-
-    static final String SQL_COUNT = "SELECT COUNT(*) FROM rows";
-
-    static final String SQL_INVENTORY =
-            "SELECT app, COUNT(*), SUM(LENGTH(text)), MAX(ts), MAX(ms)"
-                    + " FROM rows WHERE day = ? GROUP BY app ORDER BY MAX(ms) DESC";
+    // SQL 全部在 SqlSchema（单一来源，测试引用同一批常量）
 
     // ════════════════════════════════════════════ 进程内单例
 
@@ -157,8 +95,8 @@ final class LogStore {
                 db.execSQL("PRAGMA synchronous=FULL");
             } catch (Throwable ignored) {
             }
-            db.execSQL(SQL_CREATE_ROWS);
-            for (String sql : SQL_CREATE_INDEXES) {
+            db.execSQL(SqlSchema.CREATE_ROWS);
+            for (String sql : SqlSchema.CREATE_INDEXES) {
                 db.execSQL(sql);
             }
             backend = "SQLite";
@@ -199,7 +137,7 @@ final class LogStore {
 
     private boolean insert(Record r) {
         try {
-            db.execSQL(SQL_INSERT, new Object[]{
+            db.execSQL(SqlSchema.INSERT, new Object[]{
                     r.ts, r.ms, r.day, r.minute, r.app,
                     r.appLabel == null ? "" : r.appLabel, r.field, r.ev,
                     r.text == null ? 0 : r.text.length(), r.delta,
@@ -219,7 +157,7 @@ final class LogStore {
             return;
         }
         try {
-            db.execSQL("UPDATE rows SET app_label = ? WHERE day = ? AND app = ?",
+            db.execSQL(SqlSchema.UPDATE_LABEL,
                     new Object[]{label, day, app});
         } catch (Throwable ignored) {
         }
@@ -284,34 +222,34 @@ final class LogStore {
     // ════════════════════════════════════════════ 读
 
     List<Row> readDay(String day, int max) {
-        String sql = SQL_READ_DAY + (max > 0 ? " LIMIT " + max : "");
+        String sql = SqlSchema.READ_DAY + (max > 0 ? " LIMIT " + max : "");
         return query(sql, new String[]{day}, false);
     }
 
     List<String> days() {
-        return strings(SQL_DAYS, null);
+        return strings(SqlSchema.DAYS, null);
     }
 
     /** 最新 limit 行（正序返回，便于直接分段） */
     List<Row> readNewest(long fromMs, int limit) {
         String extra = fromMs > 0 ? " AND ms >= " + fromMs : "";
-        return query(String.format(SQL_READ_NEWEST, extra),
+        return query(String.format(SqlSchema.READ_NEWEST, extra),
                 new String[]{String.valueOf(limit < 1 ? 100000 : limit)}, true);
     }
 
     /** 某个应用最新 limit 条（正序） */
     List<Row> readApp(String app, long fromMs, int limit) {
         String extra = fromMs > 0 ? " AND ms >= " + fromMs : "";
-        return query(String.format(SQL_READ_APP, extra),
+        return query(String.format(SqlSchema.READ_APP, extra),
                 new String[]{app, String.valueOf(limit < 1 ? 100000 : limit)}, true);
     }
 
     List<String> appDays(String app) {
-        return strings(SQL_APP_DAYS, new String[]{app});
+        return strings(SqlSchema.APP_DAYS, new String[]{app});
     }
 
     List<Row> readAppDay(String app, String day) {
-        return query(SQL_READ_APP_DAY, new String[]{app, day}, false);
+        return query(SqlSchema.READ_APP_DAY, new String[]{app, day}, false);
     }
 
     Map<String, AppStat> appsSummary(int maxDays) {
@@ -333,7 +271,7 @@ final class LogStore {
                 }
                 where = in.length() == 0 ? " WHERE 1=0 " : " WHERE day IN (" + in + ") ";
             }
-            c = db.rawQuery(String.format(SQL_APPS_SUMMARY, where), null);
+            c = db.rawQuery(String.format(SqlSchema.APPS_SUMMARY, where), null);
             while (c.moveToNext()) {
                 AppStat a = new AppStat();
                 a.app = str(c, 0);
@@ -363,7 +301,7 @@ final class LogStore {
             args.add(day);
         }
         args.add(String.valueOf(limit < 1 ? 500 : limit));
-        out.addAll(query(String.format(SQL_SEARCH, extra), args.toArray(new String[0]), true));
+        out.addAll(query(String.format(SqlSchema.SEARCH, extra), args.toArray(new String[0]), true));
     }
 
     Map<String, String> labels(String day) {
@@ -373,7 +311,7 @@ final class LogStore {
             if (db == null) {
                 return out;
             }
-            c = db.rawQuery(SQL_APP_LABELS, new String[]{day});
+            c = db.rawQuery(SqlSchema.APP_LABELS, new String[]{day});
             while (c.moveToNext()) {
                 String app = str(c, 0);
                 String lab = str(c, 1);
@@ -393,7 +331,7 @@ final class LogStore {
             if (db == null) {
                 return 0;
             }
-            c = db.rawQuery(SQL_COUNT, null);
+            c = db.rawQuery(SqlSchema.COUNT, null);
             return c.moveToFirst() ? c.getInt(0) : 0;
         } catch (Throwable t) {
             return 0;
@@ -414,7 +352,7 @@ final class LogStore {
             if (db == null) {
                 return out;
             }
-            c = db.rawQuery(SQL_INVENTORY, new String[]{day});
+            c = db.rawQuery(SqlSchema.INVENTORY, new String[]{day});
             while (c.moveToNext()) {
                 out.add(String.format("%-26s %5d 行  %6d 字  最后 %s",
                         str(c, 0), c.getInt(1), c.getLong(2), str(c, 3)));
