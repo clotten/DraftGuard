@@ -147,6 +147,24 @@ public class TypelogService extends AccessibilityService {
         Runnable runnable;
     }
 
+    /**
+     * 界面上删除了记录后调用：关掉已打开的文件句柄。
+     *
+     * 为什么必须调：LogStore.append 会按应用缓存一个 RandomAccessFile 句柄。
+     * 删除是"写新文件 + 原子替换"，旧句柄仍指向**已被替换掉的那个旧文件**，
+     * 之后所有新记录都会写进这个已经不在目录里的文件，等于静默丢记录。
+     * 关掉句柄，下次写入会重新打开新文件。
+     */
+    static void reopenFilesAfterDelete() {
+        TypelogService s = instance;
+        if (s != null && s.store != null) {
+            try {
+                s.store.closeAll();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
     public static TypelogService get() {
         return instance;
     }

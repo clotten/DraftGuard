@@ -110,7 +110,20 @@ public class MainActivity extends Activity {
      * 为什么需要它：实测半天就有 959 个版本 / 918 段，
      * 全部铺出来是一整面文字墙，根本没法一段段看。默认只看最近 2 小时。
      */
-    private int rangeMinutes = 0;   // 0 = 全部时间（默认：避免"看起来没记录"）
+    // 默认只看最近 24 小时。
+    // 之前默认 0（全部时间），数据攒到几天后每次刷新都要把所有日期的文件
+    // 全读一遍 + 全排序 + 全分段，于是"越大越慢"。
+    // 实测 17 天 / 21109 个版本 / 9.4 MB 时就明显卡了。
+    // 要看全部，用「全部时间」按钮主动切换（那时慢是有意的）。
+    private int rangeMinutes = 1440;
+
+    /** 按天缓存的解析结果：day -> {签名, List<Row>}；签名由该日各 jsonl 的长度+修改时间算出 */
+    private static final java.util.Map<String, Object[]> dayCache = new java.util.HashMap<>();
+
+    /** 最近一次列表加载耗时（毫秒）—— 诊断用，能直接看出优化是否有效 */
+    static volatile long lastListMs;
+    static volatile int lastListDays;
+    static volatile int lastListRows;
 
     /** 应用筛选（空 = 全部） */
     private final java.util.Set<String> appFilter = new java.util.HashSet<>();
@@ -779,6 +792,21 @@ public class MainActivity extends Activity {
      * 保留滚动位置：事件到达时会自动刷新，若每次都跳回顶部，
      * 用户正在看的内容就会被顶走（这正是"界面自己跳回统计区"的老问题）。
      */
+/** 某一天各 jsonl 的签名：长度与修改时间混一起。变了就说明文件被动过 */
+    private static long daySignature(java.io.File dir) {
+        long sig = 17;
+        java.io.File[] fs = dir.listFiles();
+        if (fs == null) {
+            return sig;
+        }
+        for (java.io.File f : fs) {
+            if (f.getName().endsWith(".jsonl")) {
+                sig = sig * 131 + f.length() * 31 + f.lastModified();
+            }
+        }
+        return sig;
+    }
+
     private void refreshList() {
         if (adapter == null) {
             return;
@@ -789,22 +817,48 @@ public class MainActivity extends Activity {
         final boolean keep = listRecords.getCount() > 0;
 
         new Thread(() -> {
+            final long t0 = System.currentTimeMillis();
             LogStore store = new LogStore(getFilesDir(), 0);
 
-            // 读**所有日期**，而不是只读今天 ——
-            // 按钮写着「全部时间」，只给今天的数据是名不副实的。
-            // days() 已按新→旧排序；跨天需要按时间重排后再分段。
+            // 时间范围先算出来，好据此**只读需要的日期**。
+            // 之前是先读完所有日期再过滤 —— 数据攒到几天后，每次刷新都要把几万个
+            // 版本的 JSON 全解析、全排序、全分段，于是"越大越慢"。
+            final long from = rangeMinutes <= 0 ? 0
+                    : System.currentTimeMillis() - rangeMinutes * 60_000L;
+            final String fromDay = from > 0
+                    ? new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                          .format(new java.util.Date(from))
+                    : null;
+            final java.io.File baseDir = new java.io.File(getFilesDir(), "draftguard");
+            int daysRead = 0;
+
             java.util.List<LogStore.Row> rows = new java.util.ArrayList<>();
             for (String day : store.days()) {
-                rows.addAll(store.readDay(day, 0));
+                if (fromDay != null && day.compareTo(fromDay) < 0) {
+                    continue;       // 这一天整体早于范围 -> 整个文件都不用读
+                }
+                // 按天缓存：签名没变就复用上次解析结果。
+                // 追加会改变文件长度 -> 签名变化 -> 自动重新解析，不会读到旧数据；
+                // 删除会重写文件 -> 长度变化 -> 同样自动失效。
+                long sig = daySignature(new java.io.File(baseDir, day));
+                Object[] cached = dayCache.get(day);
+                if (cached != null && ((Long) cached[0]) == sig) {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<LogStore.Row> hit = (java.util.List<LogStore.Row>) cached[1];
+                    rows.addAll(hit);
+                } else {
+                    java.util.List<LogStore.Row> fr = store.readDay(day, 0);
+                    dayCache.put(day, new Object[]{sig, fr});
+                    rows.addAll(fr);
+                }
+                daysRead++;
                 if (rows.size() > 60000) {
                     break;      // 安全阀：数据异常大时不至于卡死
                 }
             }
             java.util.Collections.sort(rows, (a, b) -> a.ts.compareTo(b.ts));
-
-            long from = rangeMinutes <= 0 ? 0
-                    : System.currentTimeMillis() - rangeMinutes * 60_000L;
+            lastListDays = daysRead;
+            lastListRows = rows.size();
             // 分层原则（本项目最该守住的一条）：
             //   **过滤只作用于"显示"，不作用于"分段"。**
             // 边界记录（发送标记 ev=send、空文本）是分段的唯一可靠依据，必须原样交给
@@ -843,6 +897,7 @@ public class MainActivity extends Activity {
                 }
             }
 
+            lastListMs = System.currentTimeMillis() - t0;
             ui.post(() -> {
                 items.clear();
                 items.addAll(out);
@@ -860,6 +915,71 @@ public class MainActivity extends Activity {
     }
 
 
+
+/** 长按一条记录 → 确认后单点删除（隐私数据） */
+    private void confirmDelete(final Object item) {
+        final String app;
+        final String field;
+        final String fromTs;
+        final String toTs;
+        final String what;
+        final String preview;
+        if (item instanceof Burst) {
+            Burst b = (Burst) item;
+            app = b.app;
+            field = b.field;
+            fromTs = b.firstTs;
+            toTs = b.lastTs;
+            what = b.versions > 1 ? "这一整段（含 " + b.versions + " 个原始版本）" : "这一条";
+            preview = b.text;
+        } else if (item instanceof LogStore.Row) {
+            LogStore.Row rr = (LogStore.Row) item;
+            app = rr.app;
+            field = rr.field;
+            fromTs = rr.ts;
+            toTs = rr.ts;
+            what = rr.text.isEmpty() ? "这条（无正文，可能是分段边界）" : "这一条";
+            preview = rr.text;
+        } else {
+            return;
+        }
+        String pv = preview == null ? "" : preview.replace('\n', ' ').trim();
+        if (pv.length() > 80) {
+            pv = pv.substring(0, 80) + "…";
+        }
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("删除记录")
+                .setMessage("要删除" + what + "吗？\n\n" + pv
+                        + "\n\n删除后无法恢复 —— 这是隐私删除，刻意不留备份。")
+                .setPositiveButton("删除", (d, w) -> doDelete(app, field, fromTs, toTs))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 真正执行删除（后台线程），完成后作废缓存并刷新 */
+    private void doDelete(final String app, final String field,
+                          final String fromTs, final String toTs) {
+        new Thread(() -> {
+            int n;
+            try {
+                LogStore st = new LogStore(getFilesDir(), 0);
+                n = st.deleteRange(app, field, fromTs, toTs);
+                st.closeAll();
+            } catch (Throwable e) {
+                final String msg = String.valueOf(e.getMessage());
+                ui.post(() -> toast("删除失败：" + msg));
+                return;
+            }
+            // 服务端可能还开着旧文件句柄：不关掉的话，后续记录会写进已被替换的旧文件
+            TypelogService.reopenFilesAfterDelete();
+            dayCache.clear();          // 文件被重写了，缓存全部作废
+            final int deleted = n;
+            ui.post(() -> {
+                toast(deleted > 0 ? "已删除 " + deleted + " 条" : "没有找到要删的记录");
+                refreshList();
+            });
+        }, "typelog-delete").start();
+    }
 
     private void doSearch() {
         if (searchBox == null) {
@@ -1170,8 +1290,9 @@ public class MainActivity extends Activity {
 
     /** 时间范围选择：实测半天就有 918 段，全铺出来没法看，所以给了范围开关 */
     private void chooseRange() {
-        final int[] opts = {0, 60, 360, 1440};
-        String[] labels = {"全部时间（默认）", "最近 1 小时", "最近 6 小时", "最近 24 小时"};
+        final int[] opts = {1440, 360, 60, 0};
+        String[] labels = {"最近 24 小时（默认）", "最近 6 小时", "最近 1 小时",
+                "全部时间（数据多时会慢）"};
         new android.app.AlertDialog.Builder(this)
                 .setTitle("记录的时间范围")
                 .setItems(labels, (d, which) -> {
@@ -1653,6 +1774,10 @@ public class MainActivity extends Activity {
         sb.append("跳过首条文本重现(占位兜底)：").append(TypelogService.skippedRepeat).append("\n");
         sb.append("跳过同分钟去重(内容未变)：").append(TypelogService.skippedDedup).append("\n");
         sb.append("跳过清空后的删除碎片：").append(TypelogService.skippedFragment).append("\n");
+        // 列表加载耗时：数据攒多后"越大越慢"，这里是能直接看出优化效果的观察点
+        sb.append("列表加载耗时：").append(lastListMs).append(" ms（")
+          .append(lastListDays).append(" 天 / ")
+          .append(lastListRows).append(" 个版本）\n");
         sb.append("跳过(设置里排除的)：").append(TypelogService.skippedIgnored).append("\n");
         sb.append("跳过(其它原因)：").append(TypelogService.skippedOther).append("\n");
         sb.append("跳过密码框：").append(TypelogService.skippedPassword).append("\n");
@@ -1991,7 +2116,13 @@ public class MainActivity extends Activity {
             } else {
                 row = buildRow();
             }
-            bindRow(row, items.get(position));
+            final Object item = items.get(position);
+            bindRow(row, item);
+            // 长按删除：隐私数据需要能单点删掉
+            row.setOnLongClickListener(v -> {
+                confirmDelete(item);
+                return true;
+            });
             return row;
         }
 

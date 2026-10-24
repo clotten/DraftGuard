@@ -107,6 +107,9 @@ public class ProbeReceiver extends BroadcastReceiver {
                 + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(new Date())
                 + " =====");
 
+        Log.i(TAG, "list: ms=" + MainActivity.lastListMs
+                + " days=" + MainActivity.lastListDays
+                + " rows=" + MainActivity.lastListRows);
         Log.i(TAG, "service.running=" + TypelogService.running
                 + "  written=" + TypelogService.written
                 + "  errors=" + TypelogService.errors);

@@ -2,6 +2,9 @@ package com.draftguard;
 import android.util.Log;
 
 
+import java.io.BufferedWriter;
+import java.io.FileOutputStream;
+import java.io.OutputStreamWriter;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -374,6 +377,116 @@ final class LogStore {
             }
         }
         return out;
+    }
+
+    /**
+     * 删除匹配的记录（用于"隐私数据单点删除"）。
+     *
+     * 匹配条件：应用 = app，且 ts 落在 [fromTs, toTs] 内，
+     * 且（field 为空 或 field 相同）。跨天也能处理 —— 会遍历所有日期目录。
+     *
+     * 做法：逐行读出 → 保留不匹配的行 → 写临时文件 → 原子替换。
+     * **刻意不备份**：这是"把隐私删掉"的操作，留一份备份就自相矛盾了。
+     *
+     * 注意：本方法会**替换文件**。调用方必须在返回后让服务端关闭旧的
+     * RandomAccessFile 句柄（否则服务会继续往被替换掉的旧文件里追加，等于丢记录）。
+     *
+     * @return 实际删除的行数
+     */
+    synchronized int deleteRange(String app, String field, String fromTs, String toTs) {
+        if (app == null || app.isEmpty() || fromTs == null || fromTs.isEmpty()) {
+            return 0;
+        }
+        final String to = (toTs == null || toTs.isEmpty()) ? fromTs : toTs;
+        int removed = 0;
+        for (String day : days()) {
+            File f = new File(new File(root, day), app + ".jsonl");
+            if (!f.exists() || f.length() == 0) {
+                continue;
+            }
+            File tmp = new File(f.getParentFile(), app + ".jsonl.tmp");
+            int hit = 0;
+            BufferedReader rd = null;
+            BufferedWriter wr = null;
+            try {
+                rd = new BufferedReader(new InputStreamReader(
+                        new FileInputStream(f), StandardCharsets.UTF_8), 8192);
+                wr = new BufferedWriter(new OutputStreamWriter(
+                        new FileOutputStream(tmp), StandardCharsets.UTF_8), 8192);
+                String line;
+                while ((line = rd.readLine()) != null) {
+                    if (line.trim().isEmpty()) {
+                        continue;
+                    }
+                    String ts = group(TS, line);
+                    String ap = group(APP, line);
+                    boolean drop = false;
+                    if (ts != null && ap != null && app.equals(ap)
+                            && ts.compareTo(fromTs) >= 0 && ts.compareTo(to) <= 0) {
+                        if (field == null || field.isEmpty()) {
+                            drop = true;
+                        } else {
+                            String fd = group(FIELD, line);
+                            drop = field.equals(fd == null ? "" : fd);
+                        }
+                    }
+                    if (drop) {
+                        hit++;
+                    } else {
+                        wr.write(line);
+                        wr.write('\n');
+                    }
+                }
+                wr.flush();
+            } catch (Exception e) {
+                lastError = String.valueOf(e);
+                hit = 0;      // 中途失败：不替换，保持原文件
+            } finally {
+                try { if (wr != null) wr.close(); } catch (Throwable ignored) { }
+                try { if (rd != null) rd.close(); } catch (Throwable ignored) { }
+            }
+            if (hit <= 0) {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+                continue;
+            }
+            // 原子替换；失败则退回"把内容写回原文件"
+            if (!tmp.renameTo(f)) {
+                try {
+                    byte[] keep = readAllBytes(tmp);
+                    FileOutputStream fo = new FileOutputStream(f, false);
+                    try {
+                        fo.write(keep);
+                        fo.getFD().sync();
+                    } finally {
+                        fo.close();
+                    }
+                    //noinspection ResultOfMethodCallIgnored
+                    tmp.delete();
+                } catch (Exception e) {
+                    lastError = String.valueOf(e);
+                    continue;
+                }
+            }
+            removed += hit;
+        }
+        return removed;
+    }
+
+    /** 读整个文件（只用于删除时的"退回写回"路径） */
+    private static byte[] readAllBytes(File f) throws Exception {
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        FileInputStream in = new FileInputStream(f);
+        try {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                bo.write(buf, 0, n);
+            }
+        } finally {
+            try { in.close(); } catch (Throwable ignored) { }
+        }
+        return bo.toByteArray();
     }
 
     List<Row> readDay(String day, int max) {
