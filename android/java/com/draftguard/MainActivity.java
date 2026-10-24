@@ -1199,10 +1199,7 @@ public class MainActivity extends Activity {
         /** 诊断弹窗：原来页面上的状态/实时预览/统计/应用列表都放这里 */
     /** 诊断：重构时把原来页面上的内容都收到这里，注意别丢段落 */
                 private static String tail(String s, int n) {
-        if (s == null) {
-            return "";
-        }
-        return s.length() <= n ? s : "…" + s.substring(s.length() - n);
+        return Diagnostics.tail(s, n);
     }
 
     // ── 服务状态 ──
@@ -1448,8 +1445,7 @@ public class MainActivity extends Activity {
     }
 
     private static String name(Map<String, String> labels, String app) {
-        String n = labels == null ? null : labels.get(app);
-        return (n == null || n.isEmpty()) ? app : n;
+        return Diagnostics.name(labels, app);
     }
 
     /** 第三页：四张状态卡片 + 设置 + 诊断。
@@ -1851,136 +1847,15 @@ public class MainActivity extends Activity {
      * 诊断正文。集中在这里生成，页面与弹窗共用 ——
      * 分两处写就一定会走样（本项目已经因此丢过一次内容）。
      */
+    /**
+     * 诊断正文。**组装逻辑在 Diagnostics**（本类只负责把结果贴到界面上）。
+     * 页面与弹窗共用同一份文本 —— 分两处写就一定会走样。
+     */
     private StringBuilder diagText() {
-        LogStore store = new LogStore(getFilesDir(), 0);
-        String today = DAY.format(new Date());
-        Map<String, String> labels = store.labels(today);
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("收到的无障碍事件总数：").append(TypelogService.evAll).append("\n");
-        sb.append("其中文本变化事件：").append(TypelogService.evText).append("\n");
-        sb.append("取到文本并进入记录：").append(TypelogService.evCaptured).append("\n");
-        sb.append("事件里节点为空(靠兜底找回)：").append(TypelogService.evSourceNull)
-          .append(" / 兜底成功 ").append(TypelogService.evTraverseHit).append("\n");
-        sb.append("宽松判据兜底命中：").append(TypelogService.evRelaxedHit).append("\n");
-        sb.append("节点不是输入框：").append(TypelogService.evNotEditable).append("\n");
-        sb.append("跳过系统UI/不可记录包：").append(TypelogService.skippedSelf).append("\n");
-        sb.append("跳过输入法键盘自身事件：").append(TypelogService.skippedIme).append("\n");
-        sb.append("跳过删除操作(按设置)：").append(TypelogService.skippedDelete).append("\n");
-        sb.append("跳过未聚焦的框：").append(TypelogService.skippedNoFocus).append("\n");
-        sb.append("跳过占位提示/单字碎片：").append(TypelogService.skippedNoise).append("\n");
-        sb.append("跳过首条文本重现(占位兜底)：").append(TypelogService.skippedRepeat).append("\n");
-        sb.append("跳过同分钟去重(内容未变)：").append(TypelogService.skippedDedup).append("\n");
-        sb.append("跳过清空后的删除碎片：").append(TypelogService.skippedFragment).append("\n");
-        // 列表加载耗时：数据攒多后"越大越慢"，这里是能直接看出优化效果的观察点
-        sb.append("存储后端：").append(LogStore.backend)
-          .append("　索引 ").append(LogStore.indexRows).append(" 行")
-          .append(LogStore.indexImported > 0 ? "（本次从 JSONL 导入 " + LogStore.indexImported + " 行）" : "")
-          .append("\n");
-        sb.append("列表加载耗时：").append(lastListMs).append(" ms（")
-          .append(lastListDays).append(" 天 / ")
-          .append(lastListRows).append(" 个版本，实际分段 ")
-          .append(lastListSegmented).append(" 行）\n");
-        sb.append("跳过(设置里排除的)：").append(TypelogService.skippedIgnored).append("\n");
-        sb.append("跳过(其它原因)：").append(TypelogService.skippedOther).append("\n");
-        sb.append("跳过密码框：").append(TypelogService.skippedPassword).append("\n");
-        sb.append("检测到点击「发送/搜索/发布」：").append(TypelogService.sendBoundaries)
-          .append(" 次（消息分段依据）\n");
-        // 去抖被打断时的抢救次数：大于 0 说明"发送前最后一个字"确实丢过、且已被救回
-        sb.append("其中由「清空」抢救落盘：").append(TypelogService.flushes).append(" 次\n");
-        sb.append("写入失败：").append(TypelogService.errors).append("\n");
-        sb.append("本次会话落盘：").append(TypelogService.written).append(" 条\n");
-        sb.append("最近一次错误的来源包：")
-          .append(TextUtils.isEmpty(TypelogService.lastSourcePkg) ? "（无）"
-                  : TypelogService.lastSourcePkg).append("\n");
-        sb.append("最近一次错误：")
-          .append(TextUtils.isEmpty(TypelogService.lastError) ? "（无）"
-                  : TypelogService.lastError).append("\n");
-        sb.append("存储层：写入成功 ").append(LogStore.diagWrittenRows)
-          .append(" 行，累计 ").append(LogStore.diagByteCount).append(" 字节")
-          .append("，跳过 ").append(LogStore.diagSkippedRows).append(" 行\n");
-        sb.append("存储层最近一次写入：")
-          .append(LogStore.diagLastWriteAt == 0 ? "（本次进程还没写过）"
-                  : new Date(LogStore.diagLastWriteAt).toString()).append("\n");
-        sb.append("存储层最近写入的行（前 120 字）：")
-          .append(TextUtils.isEmpty(LogStore.diagLastLine) ? "（无）"
-                  : tail(LogStore.diagLastLine, 120)).append("\n");
-        sb.append("存储层最近一次错误：")
-          .append(TextUtils.isEmpty(LogStore.diagLastError) ? "（无）"
-                  : LogStore.diagLastError).append("\n");
-        sb.append("最近一次清空前的备份：")
-          .append(TextUtils.isEmpty(LogStore.diagLastBackupPath) ? "（本次进程还没清空过）"
-                  : LogStore.diagLastBackupPath).append("\n");
-
-        sb.append("\n哪些应用发过事件（次数）：\n");
-        java.util.List<Map.Entry<String, Integer>> es =
-                new ArrayList<>(TypelogService.ALL_EVENT_PKGS.entrySet());
-        java.util.Collections.sort(es, (a, b) -> b.getValue() - a.getValue());
-        if (es.isEmpty()) {
-            sb.append("（一次都没收到）\n");
-        }
-        for (int i = 0; i < es.size() && i < 12; i++) {
-            Map.Entry<String, Integer> e = es.get(i);
-            Integer t = TypelogService.TEXT_EVENT_PKGS.get(e.getKey());
-            sb.append("· ").append(name(labels, e.getKey()))
-              .append("  [").append(e.getKey()).append("]  总 ").append(e.getValue())
-              .append(" 次，其中文本变化 ").append(t == null ? 0 : t).append(" 次\n");
-        }
-
-        Integer wx = TypelogService.ALL_EVENT_PKGS.get("com.tencent.mm");
-        sb.append("\n微信(com.tencent.mm)：");
-        if (wx == null) {
-            sb.append("一次事件都没收到 ← 系统层面没放行");
-        } else {
-            Integer wxt = TypelogService.TEXT_EVENT_PKGS.get("com.tencent.mm");
-            sb.append("收到 ").append(wx).append(" 次事件，其中文本变化 ")
-              .append(wxt == null ? 0 : wxt).append(" 次");
-        }
-
-        sb.append("\n\n最近一次扫描情况：\n")
-          .append(TextUtils.isEmpty(TypelogService.lastScanInfo) ? "（还没有扫描失败过）"
-                  : TypelogService.lastScanInfo).append("\n");
-
-        sb.append("\n磁盘上的原始文件（绕开所有缓存，最硬的证据）：\n");
-        for (String line : store.fileInventory(today, 40)) {
-            sb.append("· ").append(line).append("\n");
-        }
-
-        // 原始事件是排查问题的关键证据，所以这里要把"为什么没有"说清楚：
-        // 以前只要缓冲区为空就写"诊断日志未开启"，但空有三种完全不同的原因
-        // （服务没在跑 / 日志开关没开 / 开了但还没收到事件），
-        // 一律说"未开启"会把人引到错误方向。
-        sb.append("\n最近 25 条原始事件：\n");
-        sb.append("诊断日志开关：").append(Prefs.debug(this) ? "已开启" : "未开启")
-          .append("　无障碍服务：").append(TypelogService.running ? "已连接" : "未连接").append("\n");
-        // 状态判断的原始依据：出问题时先看这一行，就知道是"读不到"还是"确实没开"
-        serviceState();
-        sb.append("状态探测依据：").append(lastStateProbe)
-          .append("　判定=").append(serviceStateName()).append("\n");
-        java.util.List<String> diag = TypelogService.DIAG;
-        synchronized (diag) {
-            if (!diag.isEmpty()) {
-                int from = Math.max(0, diag.size() - 25);
-                for (int i = from; i < diag.size(); i++) {
-                    sb.append("· ").append(diag.get(i)).append("\n");
-                }
-            } else if (!Prefs.debug(this)) {
-                sb.append("（诊断日志未开启：到「设置」里打开「诊断日志」）\n");
-            } else if (!TypelogService.running) {
-                sb.append("（无障碍服务未连接，收不到任何事件："
-                        + "到 系统设置 → 无障碍 → DraftGuard 重新打开）\n");
-            } else {
-                sb.append("（已开启，但本次会话还没收到事件："
-                        + "去任意 App 打几个字，或切一下应用就会出现在这里）\n");
-            }
-        }
-
-        if (TypelogService.skippedNoFocus > 0 && TypelogService.evCaptured == 0) {
-            sb.append("\n⚠ 已跳过 ").append(TypelogService.skippedNoFocus)
-              .append(" 个未聚焦的框，且一条都没记到。\n")
-              .append("   焦点过滤可能对本机过严，把「只记录有焦点的输入框」关掉试试。\n");
-        }
-        return sb;
+        serviceState();     // 顺带刷新 lastStateProbe
+        return Diagnostics.build(this,
+                Diagnostics.ListStats.of(lastListMs, lastListDays, lastListRows, lastListSegmented),
+                lastStateProbe, serviceStateName());
     }
 
     /** 设置项文案：页面与设置弹窗共用一份，避免两处不一致 */

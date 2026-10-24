@@ -23,6 +23,7 @@ from pathlib import Path
 # 表现为 "Storage tests failed"，但真正的原因和存储测试毫无关系。
 ROOT = Path(__file__).resolve().parent.parent / "android" / "java" / "com" / "draftguard"
 MAIN = ROOT / "MainActivity.java"
+DIAGNOSTICS = ROOT / "Diagnostics.java"
 
 # 这些是"给用户看的开关/结果"，不是诊断信号，不要求出现在诊断面板
 EXCLUDE = {
@@ -66,16 +67,19 @@ def method_body(src: str, header: str) -> str:
 
 
 def diag_region(src: str) -> str:
-    """诊断内容的可见范围 = 「工具」页上的两处：
+    """诊断内容的可见范围：
 
-      · refreshTools()  四张状态卡片（采集状态 / 实时预览 / 统计 / 应用列表）
-      · diagText()      诊断正文（页面与弹窗共用同一份）
+      · MainActivity.refreshTools()  四张状态卡片（采集状态 / 实时预览 / 统计 / 应用列表）
+      · MainActivity.diagText()      诊断正文的入口（已委派给 Diagnostics）
+      · Diagnostics.build()          诊断正文的**实际组装处**
 
-    以前只看 showDiag()；重构后内容分到了这两处，检查范围必须跟着走，
-    否则会出现"字段明明显示着、检查却说缺失"的假报警。
+    这项检查随重构搬过两次（showDiag -> refreshTools+diagText -> +Diagnostics），
+    每次都必须跟着走，否则会出现"字段明明显示着、检查却说缺失"的假报警。
     """
     return (method_body(src, "private void refreshTools() {")
-            + "\n" + method_body(src, "private StringBuilder diagText() {"))
+            + "\n" + method_body(src, "private StringBuilder diagText() {")
+            + "\n" + method_body(DIAGNOSTICS.read_text(encoding="utf-8"),
+                                  "static StringBuilder build("))
 
 
 def main() -> int:
