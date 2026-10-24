@@ -24,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent / "android" / "java" / "com" / "draftguard"
 MAIN = ROOT / "MainActivity.java"
 DIAGNOSTICS = ROOT / "Diagnostics.java"
+TOOLS = ROOT / "ToolsPage.java"
 
 # 这些是"给用户看的开关/结果"，不是诊断信号，不要求出现在诊断面板
 EXCLUDE = {
@@ -76,8 +77,9 @@ def diag_region(src: str) -> str:
     这项检查随重构搬过两次（showDiag -> refreshTools+diagText -> +Diagnostics），
     每次都必须跟着走，否则会出现"字段明明显示着、检查却说缺失"的假报警。
     """
-    return (method_body(src, "private void refreshTools() {")
-            + "\n" + method_body(src, "private StringBuilder diagText() {")
+    tools = TOOLS.read_text(encoding="utf-8")
+    return (method_body(tools, "void refreshTools() {")
+            + "\n" + method_body(src, "StringBuilder diagText() {")
             + "\n" + method_body(DIAGNOSTICS.read_text(encoding="utf-8"),
                                   "static StringBuilder build("))
 

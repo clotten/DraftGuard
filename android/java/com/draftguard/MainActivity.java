@@ -168,7 +168,7 @@ public class MainActivity extends Activity {
                     // 看起来就像"卡住了 / 不实时"。
                     if (diagExpanded && now - lastDiagRefresh > DIAG_REFRESH_MS) {
                         lastDiagRefresh = now;
-                        refreshDiagBox();
+                        refreshTools();
                     }
                 }
             }
@@ -253,7 +253,7 @@ public class MainActivity extends Activity {
     }
 
     /** @param after 选完之后的回调（用于刷新设置列表里的当前值） */
-    private void chooseRetention(final Runnable after) {
+    void chooseRetention(final Runnable after) {
         final int[] opts = {7, 30, 90, 365};
         String[] labels = new String[opts.length];
         for (int i = 0; i < opts.length; i++) {
@@ -272,7 +272,7 @@ public class MainActivity extends Activity {
     }
 
     /** 从今天出现过的 App 里挑要忽略的 */
-    private void chooseIgnored() {
+    void chooseIgnored() {
         new Thread(() -> {
             final LogStore store = new LogStore(getFilesDir(), 0);
             final String today = DAY.format(new Date());
@@ -391,6 +391,43 @@ public class MainActivity extends Activity {
         if (recordsPage != null) {
             recordsPage.refreshSummary();
         }
+    }
+
+    /** 工具页（实现在 ToolsPage） */
+    private ToolsPage toolsPage;
+
+    /** 装配工具页：首次调用时创建 */
+    private void buildToolsPage() {
+        if (toolsPage == null) {
+            toolsPage = new ToolsPage(this, toolsRoot);
+            toolsPage.build();
+        }
+    }
+
+    /** 刷新四张状态卡片 */
+    private void refreshTools() {
+        if (toolsPage != null) {
+            toolsPage.refreshTools();
+        }
+    }
+
+    /** 刷新"采集状态"卡片（服务状态变化时） */
+    private void refreshServiceCard() {
+        if (toolsPage != null) {
+            toolsPage.refreshServiceCard();
+        }
+    }
+
+    /** 服务掉了但界面还没反应时提醒用户（带节流） */
+    private void warnIfServiceStalled() {
+        if (toolsPage != null) {
+            toolsPage.warnIfServiceStalled();
+        }
+    }
+
+    /** 服务状态名（诊断面板用；实现在 ServiceState） */
+    private String serviceStateName() {
+        return ServiceState.name(serviceState());
     }
 
     TextView heading(String text) {
@@ -612,88 +649,12 @@ public class MainActivity extends Activity {
         return r.state;
     }
 
-    private boolean isServiceEnabled() {
-        return serviceState() == ServiceState.OK;
-    }
-
-    private String serviceStateText() {
-        return ServiceState.text(serviceState());
-    }
-
-    private String serviceStateName() {
-        return ServiceState.name(serviceState());
-    }
-
-    /** 去系统无障碍设置 */
-    private void openAccessibilitySettings() {
-        try {
-            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-        } catch (Throwable t) {
-            toast("打不开系统设置，请手动进入：设置 → 无障碍");
-        }
-    }
-
     /** 上次弹"服务没在记录"的时间，用于节流 */
     private long lastStalledWarnAt;
-
-    /**
-     * 服务没在记录时给一个弹窗。
-     *
-     * 只在"以前确实开过"（Prefs.serviceEnabledAt > 0）时提醒，
-     * 免得第一次装应用就弹一个用户看不懂的东西；并做 5 分钟节流。
-     */
-    private void warnIfServiceStalled() {
-        int st = serviceState();
-        boolean abnormal = (st == ServiceState.STALLED
-                || (st == ServiceState.OFF && Prefs.serviceEnabledAt(this) > 0));
-        if (!abnormal) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now - lastStalledWarnAt < 5 * 60 * 1000L) {
-            return;
-        }
-        lastStalledWarnAt = now;
-
-        String why = (st == ServiceState.STALLED)
-                ? "无障碍服务曾经打开过，但现在没有真正连上。\n\n"
-                  + "在「已下载的应用」列表里它可能仍显示「开启」，"
-                  + "这是 MIUI 上很常见的假象。"
-                : "还没有打开无障碍服务。";
-
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("记录已经停了")
-                .setMessage("现在打的字不会被保存。\n\n" + why + "\n\n"
-                        + "解决：到 系统设置 → 无障碍 → 已下载的应用 → DraftGuard，\n"
-                        + "把它「关掉再打开一次」。\n\n"
-                        + "顺手再做两件事更稳：\n"
-                        + "· 应用管理 → DraftGuard → 省电策略 → 无限制\n"
-                        + "· 打开「自启动」权限\n\n"
-                        + "回到本应用后，「工具」页会显示「● 已开启，正在记录」。")
-                .setPositiveButton("去系统设置", (d, w) -> openAccessibilitySettings())
-                .setNegativeButton("知道了", null)
-                .show();
-    }
-
 
         /** 采集状态文案（含"该怎么办"） */
         /** 去系统无障碍设置 */
         /** 上次弹"服务没在记录"的时间，用于节流 */
-
-    /**
-     * 服务没在记录时给一个弹窗。
-     *
-     * 只在"以前确实开过"（Prefs.serviceEnabledAt > 0）时提醒，
-     * 免得第一次装应用就弹一个用户看不懂的东西；并做 5 分钟节流。
-     */
-            /** 采集状态文案（含"该怎么办"） */
-        /** 去系统无障碍设置 */
-        /** 宽限期后检查一次：刷新状态显示，必要时弹窗提醒 */
-    private void refreshServiceCard() {
-        if (statusView != null) {
-            setCardText(statusView, "采集状态", serviceStateText());
-        }
-    }
 
     /** 上次弹"服务已停用"的时间，用于节流 */
 
@@ -825,360 +786,16 @@ public class MainActivity extends Activity {
         return Diagnostics.name(labels, app);
     }
 
-    /** 第三页：四张状态卡片 + 设置 + 诊断。
-     *
-     * 这些内容原来挤在记录页顶部（要滚四屏才看到记录），后来收进弹窗，
-     * 但弹窗看不全、也不方便与设置对照，于是独立成一页。
-     */
-    private void buildToolsPage() {
-        toolsRoot.removeAllViews();
-
-        statusView = cardView("采集状态", "正在检测…");
-        toolsRoot.addView(statusView);
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, dp(8), 0, dp(8));
-        Button btnOpen = button("打开系统无障碍设置");
-        btnOpen.setOnClickListener(v -> openAccessibilitySettings());
-        row.addView(btnOpen);
-        Button btnRefresh = button("刷新");
-        btnRefresh.setOnClickListener(v -> refreshTools());
-        row.addView(btnRefresh);
-        toolsRoot.addView(row);
-
-        liveView = cardView("实时预览（最近一次输入）", "…");
-        toolsRoot.addView(liveView);
-        statsView = cardView("统计（今天）", "…");
-        toolsRoot.addView(statsView);
-        appsView = cardView("今天记录过的 App", "…");
-        toolsRoot.addView(appsView);
-
-        // ── 设置：默认收起，点标题展开；布尔项用拨动开关，开/关一眼可见 ──
-        settingsHeader = sectionHeader("设置", settingsExpanded, v -> {
-            settingsExpanded = !settingsExpanded;
-            updateHeader(settingsHeader, "设置", settingsExpanded);
-            buildSettingsBox();
-        });
-        toolsRoot.addView(settingsHeader);
-        settingsBox = new LinearLayout(this);
-        settingsBox.setOrientation(LinearLayout.VERTICAL);
-        toolsRoot.addView(settingsBox);
-        buildSettingsBox();
-
-        // ── 诊断：默认收起（内容很长），点标题展开 ──
-        diagHeader = sectionHeader("诊断", diagExpanded, v -> {
-            diagExpanded = !diagExpanded;
-            updateHeader(diagHeader, "诊断", diagExpanded);
-            buildDiagBox();
-        });
-        toolsRoot.addView(diagHeader);
-        diagBox = new LinearLayout(this);
-        diagBox.setOrientation(LinearLayout.VERTICAL);
-        toolsRoot.addView(diagBox);
-        buildDiagBox();
-    }
-
-    private TextView sectionTitle(String text) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextColor(COL_FG);
-        t.setTextSize(15);
-        t.setTypeface(null, Typeface.BOLD);
-        t.setPadding(dp(4), dp(18), 0, dp(8));
-        return t;
-    }
-
     /** 一行设置项：显示当前值，点击弹出对应选择 */
 /** 诊断刷新节流间隔 */
     private static final long DIAG_REFRESH_MS = 2000;
     private long lastDiagRefresh;
 
-    /** 只刷新诊断卡片内容（不重建整个区块，避免闪烁与滚动跳动） */
-    private void refreshDiagBox() {
-        if (!diagExpanded) {
-            return;
-        }
-        if (diagView == null) {
-            buildDiagBox();
-            return;
-        }
-        new Thread(() -> {
-            final String d = diagText().toString();
-            ui.post(() -> {
-                if (diagView != null) {
-                    setCardText(diagView, "事件与存储", d);
-                }
-            });
-        }, "typelog-diag-refresh").start();
-    }
-
-    /** 更新折叠标题的箭头 */
-    private void updateHeader(TextView t, String title, boolean expanded) {
-        if (t != null) {
-            t.setText((expanded ? "▾ " : "▸ ") + title);
-        }
-    }
-
-    /** 可点击的分节标题（带展开/收起箭头） */
-    private TextView sectionHeader(String title, boolean expanded, View.OnClickListener click) {
-        TextView t = new TextView(this);
-        t.setText((expanded ? "▾ " : "▸ ") + title);
-        t.setTextColor(COL_FG);
-        t.setTextSize(15);
-        t.setTypeface(null, Typeface.BOLD);
-        t.setPadding(dp(4), dp(18), dp(4), dp(8));
-        t.setClickable(true);
-        t.setOnClickListener(click);
-        return t;
-    }
-
-    /** 一行提示（收起状态下用） */
-    private TextView collapsedHint(String text) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextColor(COL_DIM);
-        t.setTextSize(12);
-        t.setPadding(dp(4), 0, dp(4), dp(4));
-        return t;
-    }
-
-    /**
-     * 只重建设置区，不重建整页 ——
-     * 否则一展开就跳回页顶，反而更难用。
-     */
-    private void buildSettingsBox() {
-        if (settingsBox == null) {
-            return;
-        }
-        settingsBox.removeAllViews();
-        if (!settingsExpanded) {
-            settingsBox.addView(collapsedHint("已收起（共 11 项，点上面的「设置」展开）"));
-            return;
-        }
-        // 布尔项：拨动开关
-        settingsBox.addView(switchRow("后台保活（通知栏常驻）", Prefs.keepAlive(this), 0));
-        settingsBox.addView(switchRow("只记录有焦点的输入框", Prefs.focusOnly(this), 1));
-        settingsBox.addView(switchRow("忽略删除操作", Prefs.ignoreDeletions(this), 2));
-        settingsBox.addView(switchRow("排除输入法键盘事件", Prefs.skipIme(this), 3));
-        settingsBox.addView(switchRow("记录文本被清空", Prefs.keepEmpty(this), 4));
-        settingsBox.addView(switchRow("轮询兜底", Prefs.polling(this), 5));
-        settingsBox.addView(switchRow("诊断日志", Prefs.debug(this), 6));
-        // 需要选值的项：保持"点开选择"
-        settingsBox.addView(chooserRow("最少记录字数", Prefs.minChars(this) + " 字", 4));
-        settingsBox.addView(chooserRow("保留天数", Prefs.retentionDays(this) + " 天", 5));
-        settingsBox.addView(chooserRow("不记录的 App", "", 9));
-        settingsBox.addView(chooserRow("保存位置", "", 10));
-    }
-
-    /** 只重建诊断区 */
-    private void buildDiagBox() {
-        if (diagBox == null) {
-            return;
-        }
-        diagBox.removeAllViews();
-        if (!diagExpanded) {
-            diagView = null;
-            diagBox.addView(collapsedHint("已收起（内容较长，含最近 25 条原始事件，点上面展开）"));
-            return;
-        }
-        diagBox.addView(collapsedHint("排查问题用。内容较长，往下滚即可。"));
-        diagView = cardView("事件与存储", "读取中…");
-        diagBox.addView(diagView);
-        // 展开后**立刻**填充。
-        // 踩过的坑：填充原先只写在 refreshTools() 里，而它仅在切页或事件到来时执行，
-        // 于是展开诊断后一直停在"读取中…"，要等下次有事件才显示。
-        refreshDiagBox();
-    }
-
-    /** 一行开关：左标签，右 Switch */
-    private View switchRow(String label, boolean value, final int kind) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(rounded(COL_CARD, 12));
-        row.setPadding(dp(14), dp(6), dp(8), dp(6));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = dp(8);
-        row.setLayoutParams(lp);
-
-        TextView t = new TextView(this);
-        t.setText(label);
-        t.setTextColor(COL_FG);
-        t.setTextSize(13);
-        t.setLayoutParams(new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        row.addView(t);
-
-        android.widget.Switch sw = new android.widget.Switch(this);
-        sw.setChecked(value);
-        sw.setShowText(false);
-        sw.setOnCheckedChangeListener((btn, checked) -> applySwitch(kind, checked));
-        row.addView(sw);
-        return row;
-    }
-
-    /** 一行"点开选择"：左标签，右当前值 + 箭头 */
-    private View chooserRow(String label, String value, final int which) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(rounded(COL_CARD, 12));
-        row.setPadding(dp(14), dp(14), dp(14), dp(14));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = dp(8);
-        row.setLayoutParams(lp);
-        row.setClickable(true);
-        row.setOnClickListener(v -> {
-            // 最少字数与保留天数是**弹窗里选**，选完才异步生效 ——
-            // 若在这里立刻重建，拿到的是旧值（表现就是"改完不刷新，要再点一次才变"）。
-            // 所以把重建交给选择完成后的回调。
-            if (which == 4) {
-                chooseMinChars(() -> buildSettingsBox());
-            } else if (which == 5) {
-                chooseRetention(() -> buildSettingsBox());
-            } else {
-                applySetting(which);
-                buildSettingsBox();
-            }
-        });
-
-        TextView t = new TextView(this);
-        t.setText(label);
-        t.setTextColor(COL_FG);
-        t.setTextSize(13);
-        t.setLayoutParams(new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        row.addView(t);
-
-        if (!value.isEmpty()) {
-            TextView val = new TextView(this);
-            val.setText(value);
-            val.setTextColor(COL_ACCENT);
-            val.setTextSize(13);
-            val.setPadding(0, 0, dp(6), 0);
-            row.addView(val);
-        }
-        TextView arrow = new TextView(this);
-        arrow.setText("›");
-        arrow.setTextColor(COL_DIM);
-        arrow.setTextSize(16);
-        row.addView(arrow);
-        return row;
-    }
-
-    /** 开关被拨动（kind 与 buildSettingsBox 的顺序对应） */
-    private void applySwitch(int kind, boolean on) {
-        switch (kind) {
-            case 0:
-                Prefs.setKeepAlive(this, on);
-                if (on) {
-                    KeepAliveService.start(this);
-                } else {
-                    KeepAliveService.stop(this);
-                }
-                toast(on ? "保活已开启：通知栏会出现常驻通知"
-                         : "保活已关闭：内存紧张时系统可能中断记录");
-                break;
-            case 1:
-                Prefs.setFocusOnly(this, on);
-                toast(on ? "只记正在输入的框（推荐）" : "所有可编辑框都会被记录");
-                break;
-            case 2:
-                Prefs.setIgnoreDeletions(this, on);
-                toast(on ? "删字不再新建记录" : "删除也会被记录");
-                break;
-            case 3:
-                Prefs.setSkipIme(this, on);
-                toast(on ? "已排除输入法键盘事件" : "已包含输入法键盘事件");
-                break;
-            case 4:
-                Prefs.setKeepEmpty(this, on);
-                toast(on ? "文本被清空也会记录一条" : "文本清空不记录");
-                break;
-            case 5:
-                Prefs.setPolling(this, on);
-                toast("轮询兜底已" + (on ? "开启" : "关闭") + "（下次生效）");
-                break;
-            default:
-                Prefs.setDebug(this, on);
-                if (on) {
-                    TypelogService.DIAG.clear();
-                }
-                toast("诊断日志已" + (on ? "开启" : "关闭"));
-                break;
-        }
-    }
-
-
-    /** 卡片：加粗标题 + 正文 */
-    private TextView cardView(String title, String body) {
-        TextView t = new TextView(this);
-        t.setTextSize(13);
-        t.setTextColor(COL_FG);
-        t.setBackground(rounded(COL_CARD, 12));
-        t.setPadding(dp(14), dp(12), dp(14), dp(12));
-        t.setLineSpacing(dp(4), 1f);
-        t.setTextIsSelectable(true);
-        setCardText(t, title, body);
-        return t;
-    }
-
-    private void setCardText(TextView v, String title, String body) {
-        android.text.SpannableString ss = new android.text.SpannableString(title + "\n" + body);
-        ss.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), 0, title.length(),
-                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        v.setText(ss);
-    }
-
-    /** 刷新第三页：实时预览与状态是内存数据（快），统计与诊断要读盘（后台） */
-    private void refreshTools() {
-        if (statusView == null) {
-            return;
-        }
-        // 文案全部由 ToolsText 生成（纯函数，可单测）；这里只负责读库和贴到卡片上
-        ToolsText.Live live = new ToolsText.Live();
-        live.ts = TypelogService.lastTs;
-        live.app = TypelogService.lastApp;
-        live.appLabel = TypelogService.lastAppLabel;
-        live.field = TypelogService.lastField;
-        live.text = TypelogService.lastText;
-        setCardText(liveView, "实时预览（最近一次输入）", ToolsText.livePreview(live));
-
-        ToolsText.Status st = new ToolsText.Status();
-        st.written = TypelogService.written;
-        st.evAll = TypelogService.evAll;
-        st.evText = TypelogService.evText;
-        st.evCaptured = TypelogService.evCaptured;
-        st.evTraverseHit = TypelogService.evTraverseHit;
-        st.skippedPassword = TypelogService.skippedPassword;
-        setCardText(statusView, "采集状态", ToolsText.status(serviceStateText(), st));
-
-        new Thread(() -> {
-            LogStore store = LogStore.get(getFilesDir());
-            String today = DAY.format(new Date());
-            Map<String, String> labels = store.labels(today);
-            java.util.List<LogStore.Row> rows = store.readDay(today, 0);
-            long bytes = store.totalBytes();
-
-            final String stFinal = ToolsText.statsText(rows, bytes);
-            final String apFinal = ToolsText.appsText(rows, labels);
-            ui.post(() -> {
-                setCardText(statsView, "统计（今天）", stFinal);
-                setCardText(appsView, "今天记录过的 App", apFinal);
-            });
-        }, "typelog-tools").start();
-
-        // 诊断区的填充放在 buildDiagBox() 里：它决定"是否展开、是否已创建视图"，
-        // 放在这里会出现"没展开也去读盘"以及"展开了却没人填"两种毛病。
-    }
-
     /**
      * 诊断正文。**组装逻辑在 Diagnostics**（本类只负责把结果贴到界面上）。
      * 页面与弹窗共用同一份文本 —— 分两处写就一定会走样。
      */
-    private StringBuilder diagText() {
+    StringBuilder diagText() {
         serviceState();     // 顺带刷新 lastStateProbe
         return Diagnostics.build(this,
                 Diagnostics.ListStats.of(lastListMs, lastListDays, lastListRows, lastListSegmented),
@@ -1188,63 +805,6 @@ public class MainActivity extends Activity {
     /** 设置项文案（实现在 ToolsText，页面与设置弹窗共用一份） */
     private String[] settingItems() {
         return ToolsText.settingItems(this);
-    }
-
-    /** 应用某一项设置（页面与设置弹窗共用） */
-    private void applySetting(int which) {
-        switch (which) {
-            case 0:
-                boolean kaOn = !Prefs.keepAlive(this);
-                Prefs.setKeepAlive(this, kaOn);
-                if (kaOn) {
-                    KeepAliveService.start(this);
-                } else {
-                    KeepAliveService.stop(this);
-                }
-                toast(kaOn ? "已开启保活：通知栏会出现一条常驻通知，进程不易被系统回收"
-                           : "已关闭保活：内存紧张时系统可能中断记录");
-                break;
-            case 1:
-                Prefs.setFocusOnly(this, !Prefs.focusOnly(this));
-                toast(Prefs.focusOnly(this) ? "只记正在输入的框（推荐）"
-                                            : "所有可编辑框都会被记录");
-                break;
-            case 2:
-                Prefs.setIgnoreDeletions(this, !Prefs.ignoreDeletions(this));
-                toast(Prefs.ignoreDeletions(this) ? "删字不再新建记录" : "删除也会被记录");
-                break;
-            case 3:
-                Prefs.setSkipIme(this, !Prefs.skipIme(this));
-                toast("已" + (Prefs.skipIme(this) ? "排除" : "包含") + "输入法键盘事件");
-                break;
-            case 4:
-                chooseMinChars();
-                break;
-            case 5:
-                chooseRetention();
-                break;
-            case 6:
-                Prefs.setPolling(this, !Prefs.polling(this));
-                toast("轮询兜底已" + (Prefs.polling(this) ? "开启" : "关闭") + "（下次生效）");
-                break;
-            case 7:
-                Prefs.setDebug(this, !Prefs.debug(this));
-                if (Prefs.debug(this)) {
-                    TypelogService.DIAG.clear();
-                }
-                toast("诊断日志已" + (Prefs.debug(this) ? "开启" : "关闭"));
-                break;
-            case 8:
-                Prefs.setKeepEmpty(this, !Prefs.keepEmpty(this));
-                toast("已" + (Prefs.keepEmpty(this) ? "记录" : "忽略") + "清空事件");
-                break;
-            case 9:
-                chooseIgnored();
-                break;
-            default:
-                toast("应用私有目录：/data/data/" + getPackageName() + "/files/logs/");
-                break;
-        }
     }
 
     /** 「更多」：导出、分享、清空，以及跳到「工具」页 */
@@ -1272,7 +832,7 @@ public class MainActivity extends Activity {
                 })
                 .show();
     }
-    private void doExportToDownloads() {
+    void doExportToDownloads() {
         toast("正在导出到「下载/DraftGuard」…");
         new Thread(() -> {
             LogStore store = new LogStore(getFilesDir(), 0);
@@ -1288,7 +848,7 @@ public class MainActivity extends Activity {
         }, "typelog-export-pub").start();
     }
 
-    private void doExport() {
+    void doExport() {
         toast("正在打包…");
         new Thread(() -> {
             File zip = null;
@@ -1324,12 +884,12 @@ public class MainActivity extends Activity {
         }, "typelog-export").start();
     }
 
-    private void chooseMinChars() {
+    void chooseMinChars() {
         chooseMinChars(null);
     }
 
     /** @param after 选完之后的回调（用于刷新设置列表里的当前值） */
-    private void chooseMinChars(final Runnable after) {
+    void chooseMinChars(final Runnable after) {
         final int[] opts = {1, 2, 3, 5};
         String[] labels = new String[opts.length];
         for (int i = 0; i < opts.length; i++) {
@@ -1348,7 +908,7 @@ public class MainActivity extends Activity {
     }
 
     /** 清除全部记录：先给用户看一眼有多少条，再确认两次 */
-    private void confirmClearAll() {
+    void confirmClearAll() {
         new Thread(() -> {
             LogStore store = new LogStore(getFilesDir(), 0);
             final int total = store.countAll();
