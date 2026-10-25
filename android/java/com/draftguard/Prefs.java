@@ -23,7 +23,7 @@ final class Prefs {
     private static final String K_FOCUS_ONLY = "focus_only";
     private static final String K_KEEP_ALIVE = "keep_alive";
 
-    static final int DEFAULT_RETENTION = 30;
+    static final int DEFAULT_RETENTION = 0;
 
     private static SharedPreferences sp(Context c) {
         return c.getSharedPreferences(FILE, Context.MODE_PRIVATE);

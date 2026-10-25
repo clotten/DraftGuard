@@ -138,18 +138,13 @@ final class LogStore {
         diagLastLine = r.text == null ? "" : r.text;
         diagByteCount = onDisk();
         lastError = "";
-        // 保留天数清理：**每天最多跑一次**（改成每次写入都删除太浪费）。
-        // 这一段在重写成 SQLite 时漏掉了 —— "保留天数"设置因此一直空转。
-        String today = r.day == null ? "" : r.day;
-        if (!today.isEmpty() && !today.equals(lastCleanupDay)) {
-            lastCleanupDay = today;
-            cleanupOldDays();
-        }
+        // **这里刻意不做任何自动清理。**
+        // 用户明确要求：所有记录都留在数据库里，只有他主动（或授权我）删除时才减少。
+        // 之前「保留天数」会在写入路径上按天自动删旧数据 —— 已彻底摘掉，
+        // 见 cleanupOldDays() 的注释。
         return true;
     }
 
-    /** 上次执行"按天清理"时的日期（避免每次写入都删一遍） */
-    private String lastCleanupDay = "";
 
     private boolean insert(Record r) {
         try {
@@ -277,9 +272,13 @@ final class LogStore {
     }
 
     /**
-     * 按保留天数清理旧数据（物理删除，含已逻辑删除的）。
+     * 按保留天数清理旧数据 —— **当前没有任何调用点，也永远不会自动调用**。
      *
-     * <p>由 {@link #append} 每天触发一次。`retentionDays <= 0` 表示永久保留。
+     * <p>为什么留着：用户的原话是「就保留在数据库里面，到时候让你来删或者人工删除」。
+     * 也就是「删旧数据」必须是一次**明确的、有人要求的**操作，
+     * 不能是写入路径上的副作用。这个方法留给将来做「手动清理」的入口。
+     *
+     * <p>`retentionDays <= 0` 时直接返回 0（永久保留，现在是默认）。
      *
      * @return 删除的行数
      */

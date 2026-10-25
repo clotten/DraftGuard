@@ -467,7 +467,8 @@ final class ToolsPage {
                 host.chooseMinChars(this::refreshTools);
                 break;
             case 5:
-                host.chooseRetention(this::buildSettingsBox);
+                // 不再提供「保留天数」选择：自动删除已彻底移除（用户要求一条都不删）
+                host.toast("不会自动删除任何记录；要减少数据请长按删除，或「清除全部记录」");
                 break;
             case 6:
                 Prefs.setPolling(host, !Prefs.polling(host));

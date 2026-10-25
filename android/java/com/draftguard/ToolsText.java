@@ -133,7 +133,7 @@ final class ToolsText {
                         ? "开启（删字不新建记录）" : "关闭（删除也记录）"),
                 "排除输入法键盘事件：" + (Prefs.skipIme(ctx) ? "开启" : "关闭"),
                 "最少记录字数（当前 " + Prefs.minChars(ctx) + " 字）",
-                "保留天数（当前 " + Prefs.retentionDays(ctx) + " 天）",
+                "旧记录保留：永不自动删除（只在你主动删除时减少）",
                 "轮询兜底：" + (Prefs.polling(ctx) ? "开启" : "关闭"),
                 "诊断日志：" + (Prefs.debug(ctx) ? "开启" : "关闭"),
                 "记录文本被清空：" + (Prefs.keepEmpty(ctx) ? "记录" : "不记录"),
