@@ -138,8 +138,18 @@ final class LogStore {
         diagLastLine = r.text == null ? "" : r.text;
         diagByteCount = onDisk();
         lastError = "";
+        // 保留天数清理：**每天最多跑一次**（改成每次写入都删除太浪费）。
+        // 这一段在重写成 SQLite 时漏掉了 —— "保留天数"设置因此一直空转。
+        String today = r.day == null ? "" : r.day;
+        if (!today.isEmpty() && !today.equals(lastCleanupDay)) {
+            lastCleanupDay = today;
+            cleanupOldDays();
+        }
         return true;
     }
+
+    /** 上次执行"按天清理"时的日期（避免每次写入都删一遍） */
+    private String lastCleanupDay = "";
 
     private boolean insert(Record r) {
         try {
@@ -266,18 +276,28 @@ final class LogStore {
         }
     }
 
-    /** 按保留天数清理 */
-    synchronized void cleanupOldDays() {
+    /**
+     * 按保留天数清理旧数据（物理删除，含已逻辑删除的）。
+     *
+     * <p>由 {@link #append} 每天触发一次。`retentionDays <= 0` 表示永久保留。
+     *
+     * @return 删除的行数
+     */
+    synchronized int cleanupOldDays() {
         if (db == null || retentionDays <= 0) {
-            return;
+            return 0;
         }
         long cutoff = System.currentTimeMillis() - retentionDays * 86_400_000L;
         try {
             int n = db.delete("rows", "ms < ?", new String[]{String.valueOf(cutoff)});
             if (n > 0) {
                 indexRows = Math.max(0, indexRows - n);
+                diagLastError = "";
             }
-        } catch (Throwable ignored) {
+            return n;
+        } catch (Throwable t) {
+            diagLastError = "保留天数清理失败：" + t;
+            return 0;
         }
     }
 
