@@ -104,7 +104,7 @@ public class SqlTest {
         System.out.println("5) 按应用统计（带 where）");
         try {
             ResultSet rs = s.executeQuery(String.format(SqlSchema.APPS_SUMMARY,
-                    " WHERE day IN ('2026-10-23') "));
+                    " AND day IN ('2026-10-23') "));
             rs.next();
             check("只统计 10-23 时第一个是 微信",
                     "微信".equals(rs.getString(2)), rs.getString(2));
@@ -171,7 +171,50 @@ public class SqlTest {
         rs.close();
         check("10-24 的应用名是 QQ", "QQ".equals(lab), String.valueOf(lab));
 
-        System.out.println("12) 导出 JSONL 行格式");
+        System.out.println("12) 逻辑删除：打标记而不是删数据");
+        {
+            // 建一个独立库，专测逻辑删除
+            File tmp2 = Files.createTempDirectory("draftguard-soft").toFile();
+            java.sql.Connection c2 = DriverManager.getConnection(
+                    "jdbc:sqlite:" + new File(tmp2, "soft.db").getAbsolutePath());
+            Statement s2 = c2.createStatement();
+            s2.execute(SqlSchema.CREATE_ROWS);
+            s2.execute("INSERT INTO rows(ts,ms,day,minute,app,field,ev,chars,delta,comp,text,deleted)"
+                    + " VALUES('2026-10-24T20:00:00.000',100,'2026-10-24','20:00','a','f','text',3,3,0,'abc',0)");
+            s2.execute("INSERT INTO rows(ts,ms,day,minute,app,field,ev,chars,delta,comp,text,deleted)"
+                    + " VALUES('2026-10-24T20:01:00.000',200,'2026-10-24','20:01','a','f','text',3,0,0,'abc',0)");
+
+            check("删除前未删行数 = 2",
+                    count(s2, "SELECT COUNT(*) FROM rows WHERE (deleted IS NULL OR deleted = 0)") == 2,
+                    null);
+
+            // 逻辑删除第一条
+            s2.execute("UPDATE rows SET deleted = 1 WHERE app = 'a' AND ts = '2026-10-24T20:00:00.000'");
+
+            check("库里仍有 2 行（没物理删）", count(s2, "SELECT COUNT(*) FROM rows") == 2, null);
+            int alive = count(s2, "SELECT COUNT(*) FROM rows WHERE (deleted IS NULL OR deleted = 0)");
+            check("未删除的只剩 1 行", alive == 1, "实际 " + alive);
+            int dead = count(s2, "SELECT COUNT(*) FROM rows WHERE deleted = 1");
+            check("已删除的 1 行", dead == 1, "实际 " + dead);
+
+            // 导出走的是"未删除"路径：确认拿不到被删那条的文本
+            java.sql.ResultSet r2 = s2.executeQuery(
+                    "SELECT text FROM rows WHERE (deleted IS NULL OR deleted = 0)");
+            int visible = 0;
+            while (r2.next()) {
+                visible++;
+            }
+            r2.close();
+            check("导出可见行数 = 1（被删的不导出）", visible == 1, "实际 " + visible);
+
+            c2.close();
+            //noinspection ResultOfMethodCallIgnored
+            new File(tmp2, "soft.db").delete();
+            //noinspection ResultOfMethodCallIgnored
+            tmp2.delete();
+        }
+
+        System.out.println("13) 导出 JSONL 行格式");
         LogStore.Row r = new LogStore.Row();
         r.ts = "2026-10-24T21:33:01.000";
         r.minute = "21:33";

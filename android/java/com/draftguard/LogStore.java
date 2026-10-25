@@ -96,6 +96,12 @@ final class LogStore {
             } catch (Throwable ignored) {
             }
             db.execSQL(SqlSchema.CREATE_ROWS);
+            try {
+                // 老库补 deleted 列（重复执行会抛 duplicate column，忽略即可）
+                db.execSQL(SqlSchema.ALTER_ADD_DELETED);
+            } catch (Throwable ignored) {
+                // 已经有了
+            }
             for (String sql : SqlSchema.CREATE_INDEXES) {
                 db.execSQL(sql);
             }
@@ -163,26 +169,82 @@ final class LogStore {
         }
     }
 
-    /** 删除匹配的记录，返回删除行数。跨天也能处理。 */
+    /**
+     * **逻辑删除**：给匹配的记录打上 deleted=1，不物理删数据。
+     *
+     * <p>为什么改成逻辑删除（用户要求）：
+     * <ul>
+     *   <li>删错了还有救 —— 数据仍在库里，只是所有读路径都过滤掉</li>
+     *   <li>不会被误当成"丢记录"：诊断里能看到"已逻辑删除 N 条"</li>
+     *   <li>导出 zip 自动只包含未删除的记录（导出走 readDay，已带过滤）</li>
+     * </ul>
+     *
+     * <p>要真正腾出空间用 {@link #clearAll()}（它会先备份）。
+     *
+     * @return 本次标记为删除的行数
+     */
     synchronized int deleteRange(String app, String field, String fromTs, String toTs) {
         if (db == null || app == null || app.isEmpty() || fromTs == null || fromTs.isEmpty()) {
             return 0;
         }
         String to = (toTs == null || toTs.isEmpty()) ? fromTs : toTs;
         try {
-            int n;
-            if (field == null || field.isEmpty()) {
-                n = db.delete("rows", "app = ? AND ts >= ? AND ts <= ?",
-                        new String[]{app, fromTs, to});
-            } else {
-                n = db.delete("rows", "app = ? AND ts >= ? AND ts <= ? AND field = ?",
-                        new String[]{app, fromTs, to, field});
+            String extra = (field == null || field.isEmpty()) ? "" : " AND field = ?";
+            String sql = String.format(SqlSchema.MARK_DELETED, extra);
+            java.util.List<String> args = new java.util.ArrayList<>();
+            args.add(app);
+            args.add(fromTs);
+            args.add(to);
+            if (!extra.isEmpty()) {
+                args.add(field);
             }
+            // execSQL 不返回影响行数，所以先数一遍再更新（都是走索引的查询）
+            int n = countMatching(app, field, fromTs, to);
+            db.execSQL(sql, args.toArray(new String[0]));
             indexRows = Math.max(0, indexRows - n);
             return n;
         } catch (Throwable t) {
             diagLastError = String.valueOf(t);
             return 0;
+        }
+    }
+
+    /** 统计"会被这次逻辑删除命中"的行数（只数未删的） */
+    private int countMatching(String app, String field, String fromTs, String to) {
+        Cursor c = null;
+        try {
+            String extra = (field == null || field.isEmpty()) ? "" : " AND field = ?";
+            String sql = "SELECT COUNT(*) FROM rows WHERE app = ? AND ts >= ? AND ts <= ?"
+                    + extra + SqlSchema.ALIVE;
+            java.util.List<String> args = new java.util.ArrayList<>();
+            args.add(app);
+            args.add(fromTs);
+            args.add(to);
+            if (!extra.isEmpty()) {
+                args.add(field);
+            }
+            c = db.rawQuery(sql, args.toArray(new String[0]));
+            return c.moveToFirst() ? c.getInt(0) : 0;
+        } catch (Throwable t) {
+            return 0;
+        } finally {
+            close(c);
+        }
+    }
+
+    /** 已逻辑删除的行数（诊断用，让"删过的"看得见） */
+    int deletedCount() {
+        Cursor c = null;
+        try {
+            if (db == null) {
+                return 0;
+            }
+            c = db.rawQuery(SqlSchema.COUNT_DELETED, null);
+            return c.moveToFirst() ? c.getInt(0) : 0;
+        } catch (Throwable t) {
+            return 0;
+        } finally {
+            close(c);
         }
     }
 
@@ -269,7 +331,8 @@ final class LogStore {
                     }
                     in.append('\'').append(ds.get(i).replace("'", "''")).append('\'');
                 }
-                where = in.length() == 0 ? " WHERE 1=0 " : " WHERE day IN (" + in + ") ";
+                // 基句已经带 "WHERE 1=1"，这里只能追加 AND —— 否则会拼出两个 WHERE
+                where = in.length() == 0 ? " AND 1=0 " : " AND day IN (" + in + ") ";
             }
             c = db.rawQuery(String.format(SqlSchema.APPS_SUMMARY, where), null);
             while (c.moveToNext()) {

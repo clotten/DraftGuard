@@ -60,6 +60,9 @@ DraftGuard's answer: **the text should hit disk while you type, not when you hit
   character by character: type a typo, delete it, retype — the final text is what gets shown,
   while the raw versions stay on disk.
 - **Keep-alive** via a foreground service with a persistent notification (can be turned off).
+- **Deleting is a soft delete.** Long-pressing a record marks it `deleted=1`; every read path
+  (list, search, export) filters it out, but the row stays in the database so a mistaken
+  delete can be recovered. Only "clear all records" removes data for real — and it backs up first.
 - **Clearing records backs up first**, to `Download/DraftGuard/backup/`.
 - **A diagnostic probe** (`ProbeReceiver`) lets you read the app's internal state over `adb` —
   45 counters covering every stage where a record can be dropped.

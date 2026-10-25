@@ -76,7 +76,7 @@ RecordAdapter     182   记录卡片渲染
 | 改错别字 / 续写草稿正确合并 | ✅ 含跨应用切换、跨天 |
 | 搜索直接过滤列表 | ✅ |
 | 时间范围（24h/6h/1h）、按应用筛选 | ✅ |
-| **长按删除**（合并视图删整段，逐条视图删单版） | ✅ 不留备份 |
+| **长按删除**（合并视图删整段，逐条视图删单版） | ✅ **逻辑删除**：打标记，数据仍在库里 |
 | 非今天记录显示日期 | ✅ |
 | 界面实时刷新（尾随节流，最后一次必被看到） | ✅ |
 
@@ -96,11 +96,14 @@ RecordAdapter     182   记录卡片渲染
 
 | 项 | 值 |
 |---|---|
-| 表 | `rows(id, ts, ms, day, minute, app, app_label, field, ev, chars, delta, comp, text, detail)` |
+| 表 | `rows(id, ts, ms, day, minute, app, app_label, field, ev, chars, delta, comp, text, detail, deleted)` |
 | 索引 | `ms` / `(day,app)` / `(app,ms)` / `(field,ms)` |
 | 事务 | WAL + `synchronous=FULL` |
 | 迁移 | 老版本 JSONL 目录：导入 → **行数一致才删**；不一致则不导入不删除 |
-| 导出 | `<day>/<app>.jsonl` 结构不变，分析脚本零改动 |
+"
+              "| 补列 | 老库启动时 `ALTER TABLE ADD COLUMN deleted`，重复执行靠 try/catch 忽略 |
+| 导出 | `<day>/<app>.jsonl` 结构不变，分析脚本零改动；**只导出未逻辑删除的记录** |
+| 删除 | 逻辑删除（`deleted=1`）：所有读查询都带 `deleted=0`，界面/搜索/导出自动过滤 |
 
 为什么不再双路径：见 `docs/SQLITE-ONLY.md`（三个"看起来正常"的 bug）。
 
@@ -182,7 +185,7 @@ Checkout → JDK 17 → Android SDK → Fetch test jars → Run tests（五套 1
 | 装**同签名**的新版 APK | ✅ 保留 |
 | 换签名密钥 / 卸载 / 清除应用数据 / 恢复出厂 | ❌ 丢失 |
 | 应用内「清除全部记录」 | ⚠️ 先备份到下载目录再清 |
-| 长按删除单条/单段 | ⚠️ 不留备份（隐私删除本就该如此） |
+| 长按删除单条/单段 | ✅ **逻辑删除**：界面与导出都看不到，但数据仍在库里（删错了可救）；只有「清空全部记录」才真正删除 |
 
 ## 十一、开发环境
 

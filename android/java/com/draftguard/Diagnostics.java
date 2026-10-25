@@ -83,6 +83,8 @@ final class Diagnostics {
                 .append(LogStore.indexImported > 0
                         ? "（本次从旧 JSONL 导入 " + LogStore.indexImported + " 行）" : "")
                 .append("\n");
+        sb.append("已逻辑删除：").append(store.deletedCount())
+                .append(" 条（仍在库里，界面与导出都不显示；清空全部才会真正删掉）\n");
         sb.append("列表加载耗时：").append(stats.ms).append(" ms（")
                 .append(stats.days).append(" 天 / ")
                 .append(stats.rows).append(" 个版本，实际分段 ")
