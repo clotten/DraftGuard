@@ -265,32 +265,6 @@ public class MainActivity extends Activity {
         return g;
     }
 
-    /** 「更多」：导出、分享、诊断、清除、设置都收在这里 */
-        /** 诊断面板：一眼看出"断在哪一环" */
-            private void chooseRetention() {
-        chooseRetention(null);
-    }
-
-    /** @param after 选完之后的回调（用于刷新设置列表里的当前值） */
-    void chooseRetention(final Runnable after) {
-        // 0 = 永久保留（默认）。放在第一项，用户随时可以改成按天清理。
-        final int[] opts = {0, 365, 90, 30, 7};
-        String[] labels = new String[opts.length];
-        for (int i = 0; i < opts.length; i++) {
-            labels[i] = opts[i] == 0 ? "永久保留（不删任何旧记录）" : opts[i] + " 天";
-        }
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("记录保留多少天")
-                .setItems(labels, (d, which) -> {
-                    Prefs.setRetentionDays(this, opts[which]);
-                    toast(opts[which] == 0 ? "已设为永久保留" : "已设为 " + opts[which] + " 天");
-                    if (after != null) {
-                        after.run();
-                    }
-                })
-                .show();
-    }
-
     /** 从今天出现过的 App 里挑要忽略的 */
     void chooseIgnored() {
         new Thread(() -> {
@@ -820,11 +794,6 @@ public class MainActivity extends Activity {
         return Diagnostics.build(this,
                 Diagnostics.ListStats.of(lastListMs, lastListDays, lastListRows, lastListSegmented),
                 lastStateProbe, serviceStateName());
-    }
-
-    /** 设置项文案（实现在 ToolsText，页面与设置弹窗共用一份） */
-    private String[] settingItems() {
-        return ToolsText.settingItems(this);
     }
 
     /** 「更多」：导出、分享、清空，以及跳到「工具」页 */

@@ -121,24 +121,4 @@ final class ToolsText {
         return ap.toString().trim();
     }
 
-    /**
-     * 设置项文案。页面与设置弹窗**共用这一份**，避免两处不一致。
-     * 顺序即 index，与 {@code applySetting(which)} 一一对应。
-     */
-    static String[] settingItems(Context ctx) {
-        return new String[]{
-                "后台保活：" + (Prefs.keepAlive(ctx) ? "开启（通知栏常驻）" : "关闭"),
-                "只记录有焦点的输入框：" + (Prefs.focusOnly(ctx) ? "开启" : "关闭"),
-                "忽略删除操作：" + (Prefs.ignoreDeletions(ctx)
-                        ? "开启（删字不新建记录）" : "关闭（删除也记录）"),
-                "排除输入法键盘事件：" + (Prefs.skipIme(ctx) ? "开启" : "关闭"),
-                "最少记录字数（当前 " + Prefs.minChars(ctx) + " 字）",
-                "旧记录保留：永不自动删除（只在你主动删除时减少）",
-                "轮询兜底：" + (Prefs.polling(ctx) ? "开启" : "关闭"),
-                "诊断日志：" + (Prefs.debug(ctx) ? "开启" : "关闭"),
-                "记录文本被清空：" + (Prefs.keepEmpty(ctx) ? "记录" : "不记录"),
-                "不记录的 App…",
-                "显示保存位置",
-        };
-    }
 }

@@ -219,7 +219,8 @@ final class ToolsPage {
         settingsBox.addView(switchRow("诊断日志", Prefs.debug(host), 6));
         // 需要选值的项：保持"点开选择"
         settingsBox.addView(chooserRow("最少记录字数", Prefs.minChars(host) + " 字", 4));
-        settingsBox.addView(chooserRow("保留天数", Prefs.retentionDays(host) + " 天", 5));
+        // 不再提供「保留天数」：自动删除已彻底移除（用户要求一条都不删）
+        settingsBox.addView(chooserRow("旧记录保留", "永不自动删除", 5));
         settingsBox.addView(chooserRow("不记录的 App", "", 9));
         settingsBox.addView(chooserRow("保存位置", "", 10));
     }
@@ -294,7 +295,10 @@ final class ToolsPage {
             if (which == 4) {
                 host.chooseMinChars(() -> buildSettingsBox());
             } else if (which == 5) {
-                host.chooseRetention(() -> buildSettingsBox());
+                // 保留天数已不提供：点它只解释当前策略，不再弹选择框。
+                // 注意：这里**不能**调 host.chooseRetention(...) —— 原来就是它绕过了
+                // applySetting(5)，导致只改 applySetting 根本拦不住这个弹窗。
+                host.toast("永不自动删除：所有记录都留在库里，只有你主动删除时才会减少");
             } else {
                 applySetting(which);
                 buildSettingsBox();
