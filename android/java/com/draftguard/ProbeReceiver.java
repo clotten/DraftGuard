@@ -69,7 +69,7 @@ public class ProbeReceiver extends BroadcastReceiver {
                     break;
                 case "bursts": {
                     // 直接输出「合并视图」的结果，便于远程核对"整段话"是否正确
-                    LogStore st = new LogStore(context.getFilesDir(), 0);
+                    LogStore st = LogStore.get(context.getFilesDir());
                     String day = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
                     java.util.List<LogStore.Row> rows = st.readDay(day, 0);
                     java.util.List<Burst> bs = Burst.groupNewestFirst(rows);
@@ -84,7 +84,7 @@ public class ProbeReceiver extends BroadcastReceiver {
                     break;
                 }
                 case "export": {
-                    LogStore st = new LogStore(context.getFilesDir(), 0);
+                    LogStore st = LogStore.get(context.getFilesDir());
                     android.net.Uri u = Exporter.toPublicDownloads(context, st);
                     Log.i(TAG, "export -> " + (u == null ? "失败" : u.toString())
                             + "  (Download/" + Exporter.PUBLIC_SUBDIR + ")");
@@ -157,7 +157,7 @@ public class ProbeReceiver extends BroadcastReceiver {
         dumpCounts("text", TypelogService.TEXT_EVENT_PKGS);
 
         // 磁盘真相：绕开所有缓存
-        LogStore store = new LogStore(context.getFilesDir(), 0);
+        LogStore store = LogStore.get(context.getFilesDir());
         String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
         Log.i(TAG, "-- files on disk (" + today + ") --");
         for (String line : store.fileInventory(today, 120)) {
@@ -225,7 +225,7 @@ public class ProbeReceiver extends BroadcastReceiver {
     // ------------------------------------------------------------------ 动作
 
     private void doClear(Context context) {
-        LogStore store = new LogStore(context.getFilesDir(), 0);
+        LogStore store = LogStore.get(context.getFilesDir());
         int before = store.countAll();
         // 清空前备份到**公共下载目录**（用户可取回；私有目录里的备份等于没有）
         android.net.Uri bak = Exporter.backupToPublicDownloads(context, store, "preclear");

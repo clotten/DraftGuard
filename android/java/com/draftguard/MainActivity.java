@@ -268,7 +268,7 @@ public class MainActivity extends Activity {
     /** 从今天出现过的 App 里挑要忽略的 */
     void chooseIgnored() {
         new Thread(() -> {
-            final LogStore store = new LogStore(getFilesDir(), 0);
+            final LogStore store = LogStore.get(getFilesDir());
             final String today = DAY.format(new Date());
             final Map<String, Integer> counts = new LinkedHashMap<>();
             final Map<String, String> labels = store.labels(today);
@@ -566,7 +566,7 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             int n;
             try {
-                LogStore st = new LogStore(getFilesDir(), 0);
+                LogStore st = LogStore.get(getFilesDir());
                 n = st.deleteRange(app, field, fromTs, toTs);
                 st.closeAll();
             } catch (Throwable e) {
@@ -736,7 +736,7 @@ public class MainActivity extends Activity {
     /** 应用筛选：从磁盘实际记录过的应用里挑 */
     private void chooseAppFilter() {
         new Thread(() -> {
-            final LogStore store = new LogStore(getFilesDir(), 0);
+            final LogStore store = LogStore.get(getFilesDir());
             final String today = DAY.format(new Date());
             final Map<String, String> labels = store.labels(today);
             final java.util.LinkedHashSet<String> apps = new java.util.LinkedHashSet<>();
@@ -824,7 +824,7 @@ public class MainActivity extends Activity {
     void doExportToDownloads() {
         toast("正在导出到「下载/DraftGuard」…");
         new Thread(() -> {
-            LogStore store = new LogStore(getFilesDir(), 0);
+            LogStore store = LogStore.get(getFilesDir());
             final Uri uri = Exporter.toPublicDownloads(this, store);
             ui.post(() -> {
                 if (uri == null) {
@@ -840,32 +840,39 @@ public class MainActivity extends Activity {
     void doExport() {
         toast("正在打包…");
         new Thread(() -> {
-            File zip = null;
+            Uri shared = null;
             String err = null;
             try {
-                LogStore store = new LogStore(getFilesDir(), 0);
-                zip = Exporter.toCache(this, store);
+                LogStore store = LogStore.get(getFilesDir());
+                // **改用公共下载目录的 MediaStore uri 来分享**，不再走 cache + 自定义 Provider。
+                //
+                // 为什么换：实测 QQ 能收到 content://com.draftguard.files/... 这个 uri，
+                // 但打开时失败、提示「文件不存在」——自定义 authority 的 Provider
+                // 在某些接收方（QQ/微信）那里拿不到读权限，加 ClipData 也没用。
+                // 而 MediaStore 的下载 uri 是系统标准通道，接收方都认。
+                // 顺带的好处：分享出去的那份同时留在「下载/DraftGuard」里，用户回头还能找到。
+                shared = Exporter.toPublicDownloads(this, store);
             } catch (Throwable t) {
                 err = t.toString();
             }
-            final File fz = zip;
+            final Uri uri = shared;
             final String fe = err;
             ui.post(() -> {
-                if (fe != null || fz == null || fz.length() == 0) {
-                    toast("导出失败：" + fe);
+                if (fe != null || uri == null) {
+                    toast("导出失败：" + (fe == null ? "无法写入下载目录" : fe));
                     return;
                 }
                 try {
-                    Uri uri = new Uri.Builder()
-                            .scheme("content")
-                            .authority(LogFileProvider.AUTHORITY)
-                            .appendPath(fz.getName())
-                            .build();
                     Intent send = new Intent(Intent.ACTION_SEND);
                     send.setType("application/zip");
                     send.putExtra(Intent.EXTRA_STREAM, uri);
+                    // URI 同时放进 ClipData：从 Android 5.0 起，读权限要靠它一起授予
+                    send.setClipData(android.content.ClipData.newRawUri("记录导出", uri));
                     send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    startActivity(Intent.createChooser(send, "导出记录"));
+                    android.util.Log.i("DraftGuardExport", "分享 uri=" + uri);
+                    Intent chooser = Intent.createChooser(send, "导出记录");
+                    chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(chooser);
                 } catch (Throwable t) {
                     toast("分享失败：" + t);
                 }
@@ -899,7 +906,7 @@ public class MainActivity extends Activity {
     /** 清除全部记录：先给用户看一眼有多少条，再确认两次 */
     void confirmClearAll() {
         new Thread(() -> {
-            LogStore store = new LogStore(getFilesDir(), 0);
+            LogStore store = LogStore.get(getFilesDir());
             final int total = store.countAll();
             final long bytes = store.totalBytes();
             ui.post(() -> new android.app.AlertDialog.Builder(this)
@@ -912,7 +919,7 @@ public class MainActivity extends Activity {
                     .setPositiveButton("确定清除", (d, w) -> {
                         toast("正在备份并清除…");
                         new Thread(() -> {
-                            LogStore s2 = new LogStore(getFilesDir(), 0);
+                            LogStore s2 = LogStore.get(getFilesDir());
                             // 先备份到公共下载目录，用户可随时取回
                             Exporter.backupToPublicDownloads(this, s2, "preclear");
                             s2.clearAll();
@@ -941,7 +948,7 @@ public class MainActivity extends Activity {
         }
         // 先查磁盘索引里的应用名，取不到就退回包名
         try {
-            LogStore store = new LogStore(getFilesDir(), 0);
+            LogStore store = LogStore.get(getFilesDir());
             Map<String, String> lb = store.labels(DAY.format(new Date()));
             String hit = lb.get(pkg);
             if (hit != null && !hit.isEmpty()) {

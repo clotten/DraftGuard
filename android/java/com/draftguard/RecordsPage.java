@@ -205,7 +205,7 @@ final class RecordsPage {
         final StringBuilder sb = new StringBuilder();
         sb.append(on ? "● 已开启 · 记录中" : "○ 未开启（点「更多 → 设置」或去系统设置开启）");
         new Thread(() -> {
-            final LogStore store = new LogStore(host.getFilesDir(), 0);
+            final LogStore store = LogStore.get(host.getFilesDir());
             final String today = host.DAY.format(new Date());
             final java.util.List<LogStore.Row> rows = store.readDay(today, 0);
             int n = 0;
@@ -244,7 +244,7 @@ final class RecordsPage {
 
         new Thread(() -> {
             final long t0 = System.currentTimeMillis();
-            LogStore store = new LogStore(host.getFilesDir(), 0);
+            LogStore store = LogStore.get(host.getFilesDir());
 
             // 时间范围先算出来，好据此**只读需要的日期**。
             // 之前是先读完所有日期再过滤 —— 数据攒到几天后，每次刷新都要把几万个

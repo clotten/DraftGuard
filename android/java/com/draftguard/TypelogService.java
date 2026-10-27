@@ -167,7 +167,7 @@ public class TypelogService extends AccessibilityService {
         worker = new HandlerThread("draftguard-io");
         worker.start();
         handler = new Handler(worker.getLooper());
-        store = new LogStore(getFilesDir(), Prefs.retentionDays(this));
+        store = LogStore.get(getFilesDir());
         // 升级后第一次启动：把已有的 JSONL 灌进 SQLite 查询索引。
         // 放在服务自己的 IO 线程做，不挡界面；失败也只是索引不全，读会回退到文件。
         handler.post(() -> {
@@ -1414,7 +1414,7 @@ public class TypelogService extends AccessibilityService {
     static Map<String, Integer> todayCounts(Context ctx) {
         Map<String, Integer> out = new LinkedHashMap<>();
         try {
-            LogStore s = new LogStore(ctx.getFilesDir(), 0);
+            LogStore s = LogStore.get(ctx.getFilesDir());
             String today = DAY.format(new Date());
             for (LogStore.Row r : s.readDay(today, 0)) {
                 Integer c = out.get(r.app);
