@@ -1,6 +1,6 @@
 # DraftGuard · 项目状态
 
-> 最后更新：2026-10-24（深夜重构结束）　当前版本：**v3.5.3（versionCode 30503）**
+> 最后更新：2026-10-24（深夜重构结束）　当前版本：**v3.7.2（versionCode 30702）**
 > 仓库：https://github.com/clotten/DraftGuard　CI：passing
 > 复盘见 [`docs/RETRO.md`](docs/RETRO.md)｜排障见 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 > 分段判据见 [`docs/SEGMENTATION.md`](docs/SEGMENTATION.md)｜结构决策见 [`docs/CODE-STRUCTURE.md`](docs/CODE-STRUCTURE.md)
@@ -203,7 +203,7 @@ Checkout → JDK 17 → Android SDK → Fetch test jars → Run tests（五套 1
 ### 出包
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build-apk.ps1 -OutName 'DraftGuard-3.5.3.apk' -VersionName '3.5.3'
+powershell -ExecutionPolicy Bypass -File build-apk.ps1 -OutName 'DraftGuard-3.7.2.apk' -VersionName '3.5.3'
 ```
 
 版本号写进清单并在构建后断言产物（因为 aapt2 忽略参数）。
