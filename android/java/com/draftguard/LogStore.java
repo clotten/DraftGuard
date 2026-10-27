@@ -465,7 +465,11 @@ final class LogStore {
      */
     int writeZip(OutputStream os) throws Exception {
         int entries = 0;
-        ZipOutputStream zos = new ZipOutputStream(new BufferedOutputStream(os));
+        // **不要在这里包 BufferedOutputStream**：
+        // 之前包了一层，方法结束时只 finish() 不 close()，
+        // 于是 zip 的中央目录留在缓冲区里没落盘 —— 导出的 zip 是残缺的，
+        // 接收方会报"文件不存在 / 无法打开"。冲干净比少一次缓冲重要得多。
+        ZipOutputStream zos = new ZipOutputStream(os);
         try {
             for (String day : days()) {
                 Map<String, List<Row>> byApp = new LinkedHashMap<>();
@@ -486,10 +490,11 @@ final class LogStore {
                     entries++;
                 }
             }
-            zos.flush();
+            zos.finish();     // 写中央目录（zip 的目录结构）
+            zos.flush();      // 把缓冲区里的所有字节推给调用方
         } finally {
             try {
-                zos.finish();
+                zos.flush();
             } catch (Throwable ignored) {
             }
         }

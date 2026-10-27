@@ -40,8 +40,15 @@ final class RecordsPage {
 
     /** 每页最多多少行交给分段器 */
     private static final int SEGMENT_ROW_CAP = 6000;
-    /** 列表最多显示多少段 */
-    private static final int MAX_SEGMENTS = 200;
+    /**
+     * 列表最多显示多少段。
+     *
+     * <p>原来是 200 —— 结果用户选了「最近 24 小时」却只看到约 11 小时的内容：
+     * 段数被截断了，而界面**没有任何提示**，看起来就像时间范围没生效。
+     * 现在提到 1000（ListView 有视图回收，这个量级没问题），
+     * 并且截断时会在摘要里明说。
+     */
+    private static final int MAX_SEGMENTS = 1000;
 
     private final MainActivity host;
     private final LinearLayout root;
@@ -296,6 +303,11 @@ final class RecordsPage {
                 }
             }
 
+            // 是否因为上限而截断（摘要里要明说，不能静默少给）。
+            // 两种上限都要算：段数上限、以及"只读最新 N 行"的行数上限。
+            final boolean truncated = out.size() >= segCap
+                    || rows.size() >= SEGMENT_ROW_CAP;
+            final int totalSegs = showRawRows ? kept.size() : -1;
             lastMs = System.currentTimeMillis() - t0;
             // 诊断面板与探针读的是宿主上的那份统计，这里同步过去。
             // （之所以不直接删掉宿主字段：诊断/探针是排查手段，接口尽量别动。）
@@ -307,6 +319,14 @@ final class RecordsPage {
                 items.clear();
                 items.addAll(out);
                 adapter.notifyDataSetChanged();
+                // 截断必须让用户看见：否则「最近 24 小时」只显示一部分，
+                // 会被当成"时间范围没生效"（用户实际报过这个问题）。
+                if (truncated && summaryText != null) {
+                    String cur = summaryText.getText().toString();
+                    if (!cur.contains("仅显示最近")) {
+                        summaryText.setText(cur + " · 仅显示最近 " + segCap + " 段");
+                    }
+                }
                 if (keep) {
                     listRecords.setSelectionFromTop(first, top);
                 }

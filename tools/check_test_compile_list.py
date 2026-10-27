@@ -47,7 +47,6 @@ EXCLUDED = {
     "NodeScanner.java": "读 AccessibilityNodeInfo，无测试引用",
     # 不依赖 R，但当前测试集不直接引用它们
     "ImeFilter.java": "InputMethodManager 查询，无测试引用",
-    "BurstRenderer.java": "Span 渲染 UI 辅助，无测试引用",
 }
 
 
